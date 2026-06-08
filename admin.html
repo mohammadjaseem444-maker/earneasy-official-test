@@ -2312,7 +2312,7 @@ function renderUsersPage() {
   // Pagination
   document.getElementById('usersPageInfo').textContent = `Page ${currentPageUsers} of ${total} (${filtered.length} users)`;
   let btns='';
-  for(let i=1;i<=total;i++) btns+=`<div class="page-btn${i===currentPageUsers?' active':''}" onclick="goUsersPage(${i})">${i}</div>`;
+  for(let i=1;i<=total;i++) btns+=`<button type="button" class="page-btn${i===currentPageUsers?' active':''}" onclick="event.stopPropagation();goUsersPage(${i})">${i}</button>`;
   document.getElementById('usersPageBtns').innerHTML = btns;
 }
 
@@ -3158,7 +3158,8 @@ async function sendNotification() {
     const uid = document.getElementById('notifUid').value.trim();
     if(!uid){showToast('Enter user UID!','danger');return;}
     const uSnap = await fbGet('users/'+uid+'/notifications');
-    const existing = (uSnap && uSnap.exists()) ? (uSnap.val()||[]) : [];
+    const rawNotifs = (uSnap && uSnap.exists()) ? (uSnap.val()||[]) : [];
+    const existing = Array.isArray(rawNotifs) ? rawNotifs : Object.values(rawNotifs);
     await fbSet('users/'+uid+'/notifications', [notif,...existing].slice(0,20));
     showToast('✅ Notification sent to user!');
   } else {
@@ -3166,7 +3167,8 @@ async function sendNotification() {
     if(!snap || !snap.exists()) { showToast('No users found!','danger'); return; }
     const updates = {};
     Object.keys(snap.val()).forEach(uid=>{
-      const existing = snap.val()[uid].notifications||[];
+      const rawNotifs = snap.val()[uid].notifications||[];
+      const existing = Array.isArray(rawNotifs) ? rawNotifs : Object.values(rawNotifs);
       updates[`users/${uid}/notifications`] = [notif,...existing].slice(0,20);
     });
     await db.ref().update(updates).catch(e=>console.warn(e));
@@ -3313,7 +3315,7 @@ async function markAllFeedbackRead() {
 }
 
 async function deleteFeedback(key) {
-  showModal('🗑️','Delete Feedback?','Remove this feedback permanently?','warning', async () => {
+  confirmAction('🗑️','Delete Feedback?','Remove this feedback permanently?', async () => {
     await db.ref('userFeedback/' + key).remove();
     _allFeedbacks = _allFeedbacks.filter(f => f.key !== key);
     renderFeedbacks();
@@ -3936,7 +3938,7 @@ async function toggleCustomOw(key, active) {
 }
 
 async function removeCustomOw(key) {
-  showModal('⚠️','Remove Offerwall?','This will permanently remove the offerwall from app.','warning', async () => {
+  confirmAction('⚠️','Remove Offerwall?','This will permanently remove the offerwall from app.', async () => {
     await db.ref('offerwallSettings/customOfferwalls/' + key).remove();
     showToast('🗑️ Offerwall removed!');
     loadCustomOfferwallsList();

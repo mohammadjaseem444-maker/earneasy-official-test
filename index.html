@@ -5254,17 +5254,33 @@ function checkMorningNotification() {
 }
 function openNotif() {
   document.getElementById('notifPanel').classList.add('active');
-  loadNotifications();
-  // Mark ALL as read - save to Firebase so it persists across sessions
-  if(userData.notifications && userData.notifications.length > 0) {
-    let changed = false;
-    userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
-    if(changed) {
-      updateNotifBadge();
-      if(firebaseReady && currentUser) {
-        db.ref('users/' + currentUser + '/notifications').set(userData.notifications).catch(()=>{});
+  // Always fetch fresh from Firebase — ensures admin notifications reach all users including low-end devices
+  if(firebaseReady && currentUser) {
+    db.ref('users/' + currentUser + '/notifications').once('value').then(snap => {
+      if(snap && snap.exists()) {
+        const val = snap.val();
+        userData.notifications = Array.isArray(val) ? val : Object.values(val||{});
+        saveLocal();
       }
-      saveLocal();
+      loadNotifications();
+      updateNotifBadge();
+      // Mark ALL as read
+      if(userData.notifications && userData.notifications.length > 0) {
+        let changed = false;
+        userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
+        if(changed) {
+          updateNotifBadge();
+          db.ref('users/' + currentUser + '/notifications').set(userData.notifications).catch(()=>{});
+          saveLocal();
+        }
+      }
+    }).catch(() => loadNotifications());
+  } else {
+    loadNotifications();
+    if(userData.notifications && userData.notifications.length > 0) {
+      let changed = false;
+      userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
+      if(changed) { updateNotifBadge(); saveLocal(); }
     }
   }
 }
