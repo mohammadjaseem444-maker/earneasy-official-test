@@ -2312,7 +2312,7 @@ function renderUsersPage() {
   // Pagination
   document.getElementById('usersPageInfo').textContent = `Page ${currentPageUsers} of ${total} (${filtered.length} users)`;
   let btns='';
-  for(let i=1;i<=total;i++) btns+=`<button type="button" class="page-btn${i===currentPageUsers?' active':''}" onclick="event.stopPropagation();goUsersPage(${i})">${i}</button>`;
+  for(let i=1;i<=total;i++) btns+=`<button type="button" class="page-btn${i===currentPageUsers?' active':''}" onclick="event.stopPropagation();event.preventDefault();goUsersPage(${i})">${i}</button>`;
   document.getElementById('usersPageBtns').innerHTML = btns;
 }
 
@@ -2392,7 +2392,7 @@ async function bulkAction(action) {
   if(!_selectedUsers.size) return;
   const uids = [..._selectedUsers];
   if(action === 'ban') {
-    showModal('⚠️','Ban ' + uids.length + ' Users?','This will ban all selected users.','warning', async () => {
+    confirmAction('⚠️','Ban ' + uids.length + ' Users?','This will ban all selected users.', async () => {
       const updates = {}; uids.forEach(uid => { updates['users/'+uid+'/banned'] = true; });
       await db.ref().update(updates); showToast('✅ ' + uids.length + ' users banned!'); clearBulkSelect(); loadUsers();
     });
@@ -2618,7 +2618,7 @@ async function confirmWipeAccount() {
     allUsers = allUsers.filter(x => x.uid !== uid);
     renderUsersPage();
     closeModal('userDetailModal');
-    showModal('✅', 'Account Wiped!', `${u.name||'User'}'s account has been permanently wiped. They can create a new account.`, 'success');
+    showToast(`✅ Account Wiped! ${u.name||'User'}'s account has been permanently wiped. They can create a new account.`, 'success');
     
     // Update dashboard wiped count
     const wipedEl = document.getElementById('stat-wiped');
