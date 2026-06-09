@@ -3246,7 +3246,6 @@ async function enterApp() {
       }
     });
     window._earnEasyListeners.push(_wdRef);
-  }
 } // closes if(firebaseReady) block
 } // END enterApp
 
@@ -4384,8 +4383,6 @@ function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlrea
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
           const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
-          // Telegram links → openTelegramLink (stays inside Telegram)
-          // All other links → openLink (Telegram internal browser)
           if(isTgLink && twa.openTelegramLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
@@ -4394,8 +4391,6 @@ function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlrea
             window.open(link, '_blank', 'noopener,noreferrer');
           }
         } else {
-          // Not in Telegram WebApp — try Telegram app via Android Intent
-          // If Telegram not installed → browser_fallback_url opens in Chrome
           try {
             const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
               '#Intent;package=org.telegram.messenger;scheme=https;' +
@@ -4500,8 +4495,6 @@ function startTask(id, coins, duration, link, btn, showAd) {
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
           const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
-          // Telegram links → openTelegramLink (stays inside Telegram)
-          // All other links → openLink (Telegram internal browser)
           if(isTgLink && twa.openTelegramLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
@@ -4510,8 +4503,6 @@ function startTask(id, coins, duration, link, btn, showAd) {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
         } else {
-          // Not in Telegram WebApp — try Telegram app via Android Intent
-          // If Telegram not installed → browser_fallback_url opens in Chrome
           try {
             const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
               '#Intent;package=org.telegram.messenger;scheme=https;' +
