@@ -716,7 +716,12 @@ table { min-width:600px; }
           <button onclick="bulkAction('notify')" style="padding:5px 10px;background:#3b82f620;color:#3b82f6;border:1px solid #3b82f640;border-radius:7px;font-size:0.75rem;cursor:pointer;font-weight:700;">🔔 Notify</button>
           <button onclick="clearBulkSelect()" style="padding:5px 10px;background:#6b728020;color:#9ca3af;border:1px solid #6b728040;border-radius:7px;font-size:0.75rem;cursor:pointer;margin-left:auto;">✕ Clear</button>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap" id="usersTableWrap">
+          <!-- Pagination TOP -->
+          <div class="pagination" style="border-top:none;border-bottom:1px solid var(--border);margin-bottom:4px;">
+            <div class="page-info" id="usersPageInfo">-</div>
+            <div class="page-btns" id="usersPageBtns"></div>
+          </div>
           <table>
             <thead><tr>
               <th><input type="checkbox" id="selectAllUsers" onchange="toggleSelectAll(this)"></th>
@@ -725,9 +730,9 @@ table { min-width:600px; }
             <tbody id="usersTbody"><tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr></tbody>
           </table>
         </div>
-        <div class="pagination">
-          <div class="page-info" id="usersPageInfo">-</div>
-          <div class="page-btns" id="usersPageBtns"></div>
+        <div class="pagination" style="display:none;">
+          <div></div>
+          <div id="usersPageBtnsBottom"></div>
         </div>
       </div>
     </div>

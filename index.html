@@ -3220,17 +3220,17 @@ async function enterApp() {
       }
     });
     window._earnEasyListeners.push(_coinsRef);
-    // Realtime notifications (skip on low-end for performance)
+    // Realtime notifications — always active for ALL devices so admin notifications arrive instantly
     const _notifRef = db.ref('users/' + currentUser + '/notifications');
-    if(!isLowEndDevice()) {
     _notifRef.on('value', snap => {
       if (snap.exists()) {
-        const fbNotifs = snap.val() || [];
+        const val = snap.val();
+        const fbNotifs = Array.isArray(val) ? val : Object.values(val || {});
         if (JSON.stringify(fbNotifs) !== JSON.stringify(userData.notifications)) {
           userData.notifications = fbNotifs;
           saveLocal();
           updateNotifBadge();
-        if (document.getElementById('notifPanel').classList.contains('active')) loadNotifications();
+          if (document.getElementById('notifPanel').classList.contains('active')) loadNotifications();
         }
       }
     });
@@ -4381,23 +4381,31 @@ function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlrea
     function openTaskLink() {
       if(!link) return;
       try {
+        const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
-          if(twa.openTelegramLink && link.match(/^https?:\/\/(t\.me|telegram\.me)/)) {
+          if(twa.openTelegramLink && isTgLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
             twa.openLink(link, {try_instant_view: false});
           } else {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
+        } else if(isTgLink) {
+          // Open in Telegram app via Android Intent — fallback to browser if not installed
+          try {
+            const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
+              '#Intent;package=org.telegram.messenger;scheme=https;' +
+              'S.browser_fallback_url=' + encodeURIComponent(link) + ';end';
+            window.location.href = intentUrl;
+          } catch(ie) {
+            window.open(link, '_blank', 'noopener,noreferrer');
+          }
         } else {
           window.open(link, '_blank', 'noopener,noreferrer');
         }
-      } catch(e) { console.warn('Link open:', e); }
+      } catch(e) { console.warn('Link open:', e); window.open(link, '_blank', 'noopener,noreferrer'); }
     }
-
-    let taskCompleted = false;
-    const giveReward = () => {
       if(taskCompleted) return;
       taskCompleted = true;
       btn.className = 'btn-task done';
@@ -4481,21 +4489,30 @@ function startTask(id, coins, duration, link, btn, showAd) {
     function openTaskLink() {
       if(!link) return;
       try {
+        const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
-          // t.me links: openTelegramLink (stays in Telegram)
-          // Other links: openLink with try_instant_view false (Telegram internal browser)
-          if(twa.openTelegramLink && link.match(/^https?:\/\/(t\.me|telegram\.me)/)) {
+          if(twa.openTelegramLink && isTgLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
             twa.openLink(link, {try_instant_view: false});
           } else {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
+        } else if(isTgLink) {
+          // Open in Telegram app via Android Intent — fallback to browser if not installed
+          try {
+            const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
+              '#Intent;package=org.telegram.messenger;scheme=https;' +
+              'S.browser_fallback_url=' + encodeURIComponent(link) + ';end';
+            window.location.href = intentUrl;
+          } catch(ie) {
+            window.open(link, '_blank', 'noopener,noreferrer');
+          }
         } else {
           window.open(link, '_blank', 'noopener,noreferrer');
         }
-      } catch(e) { console.warn('Link open:', e); }
+      } catch(e) { console.warn('Link open:', e); window.open(link, '_blank', 'noopener,noreferrer'); }
     }
 
     btn.className = 'btn-task timing';
@@ -5254,33 +5271,17 @@ function checkMorningNotification() {
 }
 function openNotif() {
   document.getElementById('notifPanel').classList.add('active');
-  // Always fetch fresh from Firebase — ensures admin notifications reach all users including low-end devices
-  if(firebaseReady && currentUser) {
-    db.ref('users/' + currentUser + '/notifications').once('value').then(snap => {
-      if(snap && snap.exists()) {
-        const val = snap.val();
-        userData.notifications = Array.isArray(val) ? val : Object.values(val||{});
-        saveLocal();
-      }
-      loadNotifications();
+  loadNotifications();
+  // Mark ALL as read - save to Firebase so it persists across sessions
+  if(userData.notifications && userData.notifications.length > 0) {
+    let changed = false;
+    userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
+    if(changed) {
       updateNotifBadge();
-      // Mark ALL as read
-      if(userData.notifications && userData.notifications.length > 0) {
-        let changed = false;
-        userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
-        if(changed) {
-          updateNotifBadge();
-          db.ref('users/' + currentUser + '/notifications').set(userData.notifications).catch(()=>{});
-          saveLocal();
-        }
+      if(firebaseReady && currentUser) {
+        db.ref('users/' + currentUser + '/notifications').set(userData.notifications).catch(()=>{});
       }
-    }).catch(() => loadNotifications());
-  } else {
-    loadNotifications();
-    if(userData.notifications && userData.notifications.length > 0) {
-      let changed = false;
-      userData.notifications.forEach(n => { if(!n.read) { n.read = true; changed = true; } });
-      if(changed) { updateNotifBadge(); saveLocal(); }
+      saveLocal();
     }
   }
 }
