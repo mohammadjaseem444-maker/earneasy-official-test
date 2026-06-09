@@ -4381,31 +4381,39 @@ function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlrea
     function openTaskLink() {
       if(!link) return;
       try {
-        const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
-          if(twa.openTelegramLink && isTgLink) {
+          const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
+          // Telegram links → openTelegramLink (stays inside Telegram)
+          // All other links → openLink (Telegram internal browser)
+          if(isTgLink && twa.openTelegramLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
             twa.openLink(link, {try_instant_view: false});
           } else {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
-        } else if(isTgLink) {
-          // Open in Telegram app via Android Intent — fallback to browser if not installed
+        } else {
+          // Not in Telegram WebApp — try Telegram app via Android Intent
+          // If Telegram not installed → browser_fallback_url opens in Chrome
           try {
             const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
               '#Intent;package=org.telegram.messenger;scheme=https;' +
               'S.browser_fallback_url=' + encodeURIComponent(link) + ';end';
-            window.location.href = intentUrl;
+            const a = document.createElement('a');
+            a.href = intentUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
           } catch(ie) {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
-        } else {
-          window.open(link, '_blank', 'noopener,noreferrer');
         }
       } catch(e) { console.warn('Link open:', e); window.open(link, '_blank', 'noopener,noreferrer'); }
     }
+
+    let taskCompleted = false;
+    const giveReward = () => {
       if(taskCompleted) return;
       taskCompleted = true;
       btn.className = 'btn-task done';
@@ -4485,32 +4493,37 @@ function startTask(id, coins, duration, link, btn, showAd) {
       return;
     }
 
-    // Open link safely — Telegram browser mein hi khule, Chrome mein nahi
+    // Open link — Telegram mein hi khule, browser fallback agar na khule
     function openTaskLink() {
       if(!link) return;
       try {
-        const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
         if(window.Telegram && window.Telegram.WebApp) {
           const twa = window.Telegram.WebApp;
-          if(twa.openTelegramLink && isTgLink) {
+          const isTgLink = /^https?:\/\/(t\.me|telegram\.me)\//i.test(link);
+          // Telegram links → openTelegramLink (stays inside Telegram)
+          // All other links → openLink (Telegram internal browser)
+          if(isTgLink && twa.openTelegramLink) {
             twa.openTelegramLink(link);
           } else if(twa.openLink) {
             twa.openLink(link, {try_instant_view: false});
           } else {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
-        } else if(isTgLink) {
-          // Open in Telegram app via Android Intent — fallback to browser if not installed
+        } else {
+          // Not in Telegram WebApp — try Telegram app via Android Intent
+          // If Telegram not installed → browser_fallback_url opens in Chrome
           try {
             const intentUrl = 'intent://' + link.replace(/^https?:\/\//, '') +
               '#Intent;package=org.telegram.messenger;scheme=https;' +
               'S.browser_fallback_url=' + encodeURIComponent(link) + ';end';
-            window.location.href = intentUrl;
+            const a = document.createElement('a');
+            a.href = intentUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
           } catch(ie) {
             window.open(link, '_blank', 'noopener,noreferrer');
           }
-        } else {
-          window.open(link, '_blank', 'noopener,noreferrer');
         }
       } catch(e) { console.warn('Link open:', e); window.open(link, '_blank', 'noopener,noreferrer'); }
     }
@@ -5950,8 +5963,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
