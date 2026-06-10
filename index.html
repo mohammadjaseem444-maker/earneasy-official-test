@@ -1020,7 +1020,7 @@ body.slow-net .splash-spinner {
 <div id="adTimerOverlay" style="display:none;position:fixed;inset:0;z-index:8900;background:#00000090;align-items:center;justify-content:center;flex-direction:column;">
   <div style="background:#1a2a1a;border:2px solid #16a34a;border-radius:20px;padding:28px 32px;text-align:center;">
     <div style="font-size:0.85rem;color:#9ca3af;margin-bottom:8px;font-family:Rajdhani,sans-serif;">Ad playing — please wait</div>
-    <div style="font-family:Orbitron,sans-serif;font-size:2.5rem;color:#16a34a;font-weight:900;" id="adTimerCount">15</div>
+    <div style="font-family:Orbitron,sans-serif;font-size:2.5rem;color:#16a34a;font-weight:900;" id="adTimerCount">17</div>
     <div style="font-size:0.78rem;color:#6b7280;margin-top:6px;">seconds remaining</div>
     <div style="width:200px;height:4px;background:#374151;border-radius:2px;margin:12px auto 0;">
       <div id="adTimerBar" style="height:100%;background:#16a34a;border-radius:2px;width:100%;transition:width 1s linear;"></div>
@@ -3627,20 +3627,20 @@ function waitForSdk(sdkName, maxWait=8000) {
 
 function showDailyAd(callback) {
   // Zone 10726400 — Daily Ads & Daily Bonus
-  const adTimer = (window._appSettings && window._appSettings.adCooldown > 0) ? window._appSettings.adCooldown : 0;
-  const doAdWithTimer = (adCallback) => {
-    if(adTimer > 0) {
-      startCooldown(adTimer);
-      setTimeout(() => adCallback(true), adTimer * 1000);
-    } else {
-      adCallback(true);
-    }
-  };
+  // 17s timer runs SIMULTANEOUSLY with ad — both must complete for coins
   if (typeof show_10726400 !== 'undefined') {
+    let adDone = false, timerDone = false;
+    const checkBoth = () => { if(adDone && timerDone) callback(true); };
+    // Start 17-second timer at same time as ad
+    showAdTimer(17, () => { timerDone = true; checkBoth(); });
+    // Start ad
     show_10726400().then(() => {
-      doAdWithTimer(callback);
+      adDone = true;
+      checkBoth();
     }).catch(e => {
       console.warn('Monetag Daily Ad error:', e);
+      const ov = document.getElementById('adTimerOverlay');
+      if(ov) ov.style.display = 'none';
       callback(false);
     });
   } else {
@@ -3746,38 +3746,52 @@ function gameClaimDecision(claim) {
     return;
   }
   
-  // User claimed - run ad, then 3s cooldown, then give coins + next question
-  adFunc((ok) => {
-    if(ok) {
-      // Ad done - give coins + deduct limit
-      addCoins(coins, source); _trackAction('game');
-      deductGameLimit(limitKey, limitMax);
-      // 3-second cooldown overlay before next question
-      const gcOverlay = document.getElementById('cooldownOverlay');
-      const gcCount = document.getElementById('cooldownCount');
-      let gcRemaining = 3;
-      if(gcOverlay) {
-        gcOverlay.style.display = 'flex';
+  // User claimed — run ad + 17s timer simultaneously, both must complete for coins
+  let adDone = false, timerDone = false, adFailed = false;
+
+  const giveRewardAndNext = () => {
+    addCoins(coins, source); _trackAction('game');
+    deductGameLimit(limitKey, limitMax);
+    // 3-second cooldown before next question
+    const gcOverlay = document.getElementById('cooldownOverlay');
+    const gcCount = document.getElementById('cooldownCount');
+    let gcRemaining = 3;
+    if(gcOverlay) {
+      gcOverlay.style.display = 'flex';
+      if(gcCount) gcCount.textContent = gcRemaining;
+      const gcInterval = setInterval(() => {
+        gcRemaining--;
         if(gcCount) gcCount.textContent = gcRemaining;
-        const gcInterval = setInterval(() => {
-          gcRemaining--;
-          if(gcCount) gcCount.textContent = gcRemaining;
-          if(gcRemaining <= 0) {
-            clearInterval(gcInterval);
-            gcOverlay.style.display = 'none';
-            if(source.includes('Math')) newMathQuestion();
-            else if(source.includes('Captcha')) newCaptcha();
-            else newColorRound();
-          }
-        }, 1000);
-      } else {
-        setTimeout(() => {
+        if(gcRemaining <= 0) {
+          clearInterval(gcInterval);
+          gcOverlay.style.display = 'none';
           if(source.includes('Math')) newMathQuestion();
           else if(source.includes('Captcha')) newCaptcha();
           else newColorRound();
-        }, 3000);
-      }
+        }
+      }, 1000);
     } else {
+      setTimeout(() => {
+        if(source.includes('Math')) newMathQuestion();
+        else if(source.includes('Captcha')) newCaptcha();
+        else newColorRound();
+      }, 3000);
+    }
+  };
+
+  const checkBoth = () => { if(adDone && timerDone && !adFailed) giveRewardAndNext(); };
+
+  // Start 17-second timer at same time as ad
+  showAdTimer(17, () => { timerDone = true; checkBoth(); });
+
+  adFunc((ok) => {
+    if(ok) {
+      adDone = true;
+      checkBoth();
+    } else {
+      adFailed = true;
+      const ov = document.getElementById('adTimerOverlay');
+      if(ov) ov.style.display = 'none';
       showModal('❌', 'Ad Failed', 'Ad not completed. No coins earned.', 'error');
       setTimeout(() => {
         if(source.includes('Math')) newMathQuestion();
@@ -5501,11 +5515,18 @@ async function claimStreakDay() {
 
   if(adRequired) {
     showToast('📺 Ad dekho aur streak claim karo!');
-    // Show Rewarded Interstitial Ad (zone 10726400)
+    // Ad + 17s timer simultaneously — both must complete
     try {
       await new Promise((resolve) => {
         if(typeof show_10726400 !== 'function') { resolve(); return; }
-        show_10726400().then(() => resolve()).catch(() => resolve());
+        let adDone = false, timerDone = false;
+        const checkBoth = () => { if(adDone && timerDone) resolve(); };
+        showAdTimer(17, () => { timerDone = true; checkBoth(); });
+        show_10726400().then(() => { adDone = true; checkBoth(); }).catch(() => {
+          const ov = document.getElementById('adTimerOverlay');
+          if(ov) ov.style.display = 'none';
+          resolve();
+        });
       });
     } catch(e) {}
   } else {
