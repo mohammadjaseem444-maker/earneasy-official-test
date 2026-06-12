@@ -2899,7 +2899,7 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
     type: 'welcome'
   }];
 
-  // Handle referral
+  // Handle referral — write to queue (direct transaction blocked by Firebase rules)
   if(refCode && firebaseReady) {
     try {
       const refSnap = await db.ref('referLookup/' + refCode).get();
@@ -2907,18 +2907,19 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
         const referrerId = refSnap.val().uid;
         const refCoins = (window._appSettings && window._appSettings.referrerCoins) ? window._appSettings.referrerCoins : 300;
         if(referrerId && referrerId !== uid) {
+          // New user gets coins immediately (their own data)
           userData.coins += refCoins;
           userData.todayEarned += refCoins;
           userData.referCodeUsed = refCode;
           userData.referCodeUsedAt = Date.now();
-          // Use single update for referrer to avoid partial state (race condition fix)
-          // Use transactions to prevent race condition (multiple users using same ref code simultaneously)
-          await db.ref('users/' + referrerId + '/coins').transaction(c => (c||0) + refCoins);
-          await db.ref('users/' + referrerId + '/referCount').transaction(c => (c||0) + 1);
-          await db.ref('users/' + referrerId + '/referEarnings').transaction(c => (c||0) + refCoins);
-          await db.ref('users/' + referrerId + '/lastReferAt').set(Date.now());
           userData.notifications.unshift({title:'🎁 Referral Bonus!', msg:`You got ${refCoins} coins for joining with a referral code!`, time:'Just now', read:false});
           showToast(`🎉 Referral bonus! +${refCoins} coins!`);
+          // Referrer gets coins via queue (processed when referrer opens app)
+          await db.ref('referralRewards/' + referrerId + '/' + uid).set({
+            coins: refCoins,
+            from: uid,
+            at: Date.now()
+          }).catch(e => console.warn('Referral queue write error:', e));
         }
       }
     } catch(e) { console.warn('Referral error:', e); }
@@ -2981,6 +2982,83 @@ async function enterApp() {
   }
   window._earnEasyListeners = [];
   await checkDailyReset();
+
+  // Process pending referral rewards — only ONCE per session
+  if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
+    window._referralRewardsProcessed = true;
+    try {
+      const rewardsSnap = await db.ref('referralRewards/' + currentUser).get();
+      if(rewardsSnap && rewardsSnap.exists()) {
+        const rewards = rewardsSnap.val();
+        let totalCoins = 0, totalReferrals = 0;
+        const entries = Object.entries(rewards);
+        for(const [fromUid, entry] of entries) {
+          if(entry && entry.coins > 0) { totalCoins += entry.coins; totalReferrals++; }
+        }
+        if(totalCoins > 0) {
+          // Remove queue FIRST (prevents double processing if app reopens)
+          await db.ref('referralRewards/' + currentUser).remove();
+          // THEN add coins
+          userData.coins = (userData.coins || 0) + totalCoins;
+          userData.referCount = (userData.referCount || 0) + totalReferrals;
+          userData.referEarnings = (userData.referEarnings || 0) + totalCoins;
+          userData.lastReferAt = Date.now();
+          if(!userData.notifications) userData.notifications = [];
+          userData.notifications.unshift({
+            title: '🎁 Referral Reward!',
+            msg: `${totalReferrals} friend${totalReferrals > 1 ? 's' : ''} joined using your code! +${totalCoins} coins added!`,
+            time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
+            read: false
+          });
+          await db.ref('users/' + currentUser).update({
+            coins: userData.coins,
+            referCount: userData.referCount,
+            referEarnings: userData.referEarnings,
+            lastReferAt: userData.lastReferAt
+          });
+          saveLocal();
+          showToast(`🎉 +${totalCoins} referral coins added!`);
+        }
+      }
+    } catch(e) { console.warn('Referral rewards processing error:', e); }
+  }
+
+  // Process pending offerwall coins (Wannads + CPX postback queue)
+  if(firebaseReady && currentUser && !window._pendingCoinsProcessed) {
+    window._pendingCoinsProcessed = true;
+    try {
+      const pendingSnap = await db.ref('pendingCoins/' + currentUser).get();
+      if(pendingSnap && pendingSnap.exists()) {
+        const pending = pendingSnap.val();
+        let totalCoins = 0;
+        const entries = Object.entries(pending);
+        for(const [key, entry] of entries) {
+          if(entry && entry.coins > 0) totalCoins += entry.coins;
+        }
+        if(totalCoins > 0) {
+          // Remove queue FIRST (prevents double processing)
+          await db.ref('pendingCoins/' + currentUser).remove();
+          userData.coins = (userData.coins || 0) + totalCoins;
+          userData.todayEarned = (userData.todayEarned || 0) + totalCoins;
+          if(!userData.notifications) userData.notifications = [];
+          userData.notifications.unshift({
+            title: '✅ Task Reward!',
+            msg: `Offerwall tasks complete! +${totalCoins} coins added!`,
+            time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
+            read: false
+          });
+          await db.ref('users/' + currentUser).update({
+            coins: userData.coins,
+            todayEarned: userData.todayEarned
+          });
+          saveLocal();
+          showToast(`🎉 +${totalCoins} task coins added!`);
+          updateNotifBadge();
+        }
+      }
+    } catch(e) { console.warn('Pending coins processing error:', e); }
+  }
+
   // Lazy load non-critical features after main UI
   setTimeout(() => {
     if(typeof loadDynamicOfferwalls === 'function') loadDynamicOfferwalls();
@@ -3627,16 +3705,21 @@ function waitForSdk(sdkName, maxWait=8000) {
 
 function showDailyAd(callback) {
   // Zone 10726400 — Daily Ads & Daily Bonus
-  // 17s timer runs SIMULTANEOUSLY with ad — both must complete for coins
+  // Monetag ad runs freely (no overlay interference = proper tracking)
+  // If user closes ad before 17s, remaining timer shows
   if (typeof show_10726400 !== 'undefined') {
-    let adDone = false, timerDone = false;
-    const checkBoth = () => { if(adDone && timerDone) callback(true); };
-    // Start 17-second timer at same time as ad
-    showAdTimer(17, () => { timerDone = true; checkBoth(); });
-    // Start ad
+    const startTime = Date.now();
+    const REQUIRED_MS = 17000;
     show_10726400().then(() => {
-      adDone = true;
-      checkBoth();
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
+      if(remaining > 0) {
+        // User closed ad early — show remaining timer
+        showAdTimer(remaining, () => callback(true));
+      } else {
+        // Full 17s passed while watching — give coins directly
+        callback(true);
+      }
     }).catch(e => {
       console.warn('Monetag Daily Ad error:', e);
       const ov = document.getElementById('adTimerOverlay');
@@ -3746,13 +3829,14 @@ function gameClaimDecision(claim) {
     return;
   }
   
-  // User claimed — run ad + 17s timer simultaneously, both must complete for coins
-  let adDone = false, timerDone = false, adFailed = false;
+  // User claimed — ad runs freely, remaining timer shows if closed early
+  const startTime = Date.now();
+  const REQUIRED_MS = 17000;
+  let adFailed = false;
 
   const giveRewardAndNext = () => {
     addCoins(coins, source); _trackAction('game');
     deductGameLimit(limitKey, limitMax);
-    // 3-second cooldown before next question
     const gcOverlay = document.getElementById('cooldownOverlay');
     const gcCount = document.getElementById('cooldownCount');
     let gcRemaining = 3;
@@ -3779,15 +3863,16 @@ function gameClaimDecision(claim) {
     }
   };
 
-  const checkBoth = () => { if(adDone && timerDone && !adFailed) giveRewardAndNext(); };
-
-  // Start 17-second timer at same time as ad
-  showAdTimer(17, () => { timerDone = true; checkBoth(); });
-
   adFunc((ok) => {
     if(ok) {
-      adDone = true;
-      checkBoth();
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
+      if(remaining > 0) {
+        // Closed early — show remaining timer then reward
+        showAdTimer(remaining, () => giveRewardAndNext());
+      } else {
+        giveRewardAndNext();
+      }
     } else {
       adFailed = true;
       const ov = document.getElementById('adTimerOverlay');
@@ -5515,14 +5600,20 @@ async function claimStreakDay() {
 
   if(adRequired) {
     showToast('📺 Ad dekho aur streak claim karo!');
-    // Ad + 17s timer simultaneously — both must complete
     try {
       await new Promise((resolve) => {
         if(typeof show_10726400 !== 'function') { resolve(); return; }
-        let adDone = false, timerDone = false;
-        const checkBoth = () => { if(adDone && timerDone) resolve(); };
-        showAdTimer(17, () => { timerDone = true; checkBoth(); });
-        show_10726400().then(() => { adDone = true; checkBoth(); }).catch(() => {
+        const startTime = Date.now();
+        const REQUIRED_MS = 17000;
+        show_10726400().then(() => {
+          const elapsed = Date.now() - startTime;
+          const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
+          if(remaining > 0) {
+            showAdTimer(remaining, () => resolve());
+          } else {
+            resolve();
+          }
+        }).catch(() => {
           const ov = document.getElementById('adTimerOverlay');
           if(ov) ov.style.display = 'none';
           resolve();
