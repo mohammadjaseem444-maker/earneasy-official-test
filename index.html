@@ -155,15 +155,15 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" media="print" onload="this.media='all'"/>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
 <!-- Monetag SDK — Daily Ads & Daily Bonus -->
-<script async src='//libtl.com/sdk.js' data-zone='10726400' data-sdk='show_10726400'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10726400' data-sdk='show_10726400' data-sub-id='guest'></script>
 <!-- Monetag SDK — Math Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761849' data-sdk='show_10761849'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761849' data-sdk='show_10761849' data-sub-id='guest'></script>
 <!-- Monetag SDK — Captcha Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761857' data-sdk='show_10761857'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761857' data-sdk='show_10761857' data-sub-id='guest'></script>
 <!-- Monetag SDK — Color Match Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761865' data-sdk='show_10761865'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761865' data-sdk='show_10761865' data-sub-id='guest'></script>
 <!-- Monetag SDK — Tasks (Follow & Earn + View & Earn) -->
-<script async src='//libtl.com/sdk.js' data-zone='10761884' data-sdk='show_10761884'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761884' data-sdk='show_10761884' data-sub-id='guest'></script>
 <!-- Firebase SDK — loaded in head for early availability -->
 <style>
 :root {
@@ -3057,6 +3057,22 @@ async function enterApp() {
         }
       }
     } catch(e) { console.warn('Pending coins processing error:', e); }
+  }
+
+  // Set Monetag SUBID to user's UID for postback tracking
+  if(currentUser) {
+    try {
+      document.querySelectorAll('script[data-sdk^="show_107"]').forEach(s => {
+        s.setAttribute('data-sub-id', currentUser);
+      });
+      if(window._mNTag && window._mNTag.cmd) {
+        window._mNTag.cmd.push(() => {
+          if(typeof window._mNTag.set === 'function') {
+            window._mNTag.set('subid', currentUser);
+          }
+        });
+      }
+    } catch(e) { console.warn('Monetag subid error:', e); }
   }
 
   // Lazy load non-critical features after main UI
