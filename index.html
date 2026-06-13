@@ -3059,6 +3059,44 @@ async function enterApp() {
     } catch(e) { console.warn('Pending coins processing error:', e); }
   }
 
+  // Real-time pendingCoins listener — instant coins jaise hi postback fire ho
+  if(firebaseReady && currentUser) {
+    const _pendingRef = db.ref('pendingCoins/' + currentUser);
+    _pendingRef.on('value', async snap => {
+      if(snap && snap.exists()) {
+        const pending = snap.val();
+        let totalCoins = 0;
+        const entries = Object.entries(pending);
+        for(const [key, entry] of entries) {
+          if(entry && entry.coins > 0) totalCoins += entry.coins;
+        }
+        if(totalCoins > 0) {
+          // Remove FIRST then add coins
+          await db.ref('pendingCoins/' + currentUser).remove().catch(()=>{});
+          userData.coins = (userData.coins || 0) + totalCoins;
+          userData.todayEarned = (userData.todayEarned || 0) + totalCoins;
+          if(!userData.notifications) userData.notifications = [];
+          userData.notifications.unshift({
+            title: '✅ Coins Added!',
+            msg: `+${totalCoins} coins successfully added!`,
+            time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
+            read: false
+          });
+          await db.ref('users/' + currentUser).update({
+            coins: userData.coins,
+            todayEarned: userData.todayEarned
+          }).catch(()=>{});
+          saveLocal();
+          updateUI();
+          updateNotifBadge();
+          showToast(`🎉 +${totalCoins} coins added!`);
+          _trackAction('ad');
+        }
+      }
+    });
+    window._earnEasyListeners.push(_pendingRef);
+  }
+
   // Set Monetag SUBID to user's UID for postback tracking
   if(currentUser) {
     try {
@@ -3851,7 +3889,9 @@ function gameClaimDecision(claim) {
   let adFailed = false;
 
   const giveRewardAndNext = () => {
-    addCoins(coins, source); _trackAction('game');
+    // NO client-side addCoins — postback se aayega via real-time listener
+    showToast('⏳ Coins aa rahe hain...');
+    _trackAction('game');
     deductGameLimit(limitKey, limitMax);
     const gcOverlay = document.getElementById('cooldownOverlay');
     const gcCount = document.getElementById('cooldownCount');
@@ -3992,7 +4032,7 @@ function watchAd() {
   showDailyAd((completed) => {
     adWatching = false;
     if (completed) {
-      // ATOMIC Firebase transaction - cannot be bypassed
+      // ATOMIC Firebase transaction - track ad count
       db.ref('users/' + currentUser + '/adsWatched').transaction(current => {
         const cur = current || 0;
         const max = window._appSettings?.maxAds || 30;
@@ -4001,9 +4041,9 @@ function watchAd() {
       }).then(result => {
         if (result.committed) {
           userData.adsWatched = result.snapshot.val();
-          // Also save today's date to Firebase for reset tracking
           db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-          addCoins(coinsPerAd, 'Daily Ad'); _trackAction('ad');
+          // NO client-side addCoins — postback se aayenge via pendingCoins listener
+          showToast('⏳ Ad complete! Coins aa rahe hain...');
           updateUI();
           if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
         } else {
@@ -4134,16 +4174,15 @@ function showBonusAd() {
   showDailyAd((completed) => {
     if(btn) { btn.disabled = false; btn.style.opacity = '1'; }
     if (completed) {
-      const bonusCoins = (window._appSettings && window._appSettings.bonusCoins) ? window._appSettings.bonusCoins : 10;
-      // Ad finished = give coins immediately
+      // Mark bonus claimed — NO client-side addCoins, postback se aayega
       userData.bonusClaimed = true;
-      addCoins(bonusCoins, 'Daily Bonus');
       if (firebaseReady) {
         const today = getToday();
         db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
         userData.bonusDate = today;
       }
-      showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
+      saveLocal();
+      showToast('⏳ Bonus ad complete! Coins aa rahe hain...');
       updateUI();
       if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
     } else {
@@ -5640,7 +5679,7 @@ async function claimStreakDay() {
     showToast('🎁 Free claim! Streak reward mil raha hai!');
   }
 
-  // Ad done — give reward
+  // Ad done — give reward via streak update only, NO client-side addCoins
   const newCount = Math.min((s.count || 0) + 1, 7);
   const coins = STREAK_COINS[newCount] || 3;
 
@@ -5648,24 +5687,24 @@ async function claimStreakDay() {
     count: newCount,
     lastDay: today,
     claimedToday: true,
-    lastClaimTime: Date.now() // Anti-scam timestamp
+    lastClaimTime: Date.now()
   };
 
   userData.streak = newStreak;
   await db.ref('users/' + currentUser + '/streak').set(newStreak);
 
-  // Give coins using secure transaction
+  // Streak coins via Firebase directly (streak is admin-controlled, not postback)
   window._trustedCoinUpdate = true;
   await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
   userData.coins = (userData.coins||0) + coins;
   window._trustedCoinUpdate = false;
 
+  saveLocal();
   updateUI();
   renderStreak(newStreak);
 
   if(newCount === 7) {
     showModal('🎁', '7 Day Streak Complete!', 'Wah bhai! Poore 7 din! +50 coins mile! Streak reset hoga kal se dobara shuru kar!', 'success');
-    // Reset for next cycle — claimedToday: false so Day 1 is available tomorrow
     setTimeout(async () => {
       const resetStreak = {count: 0, lastDay: today, claimedToday: false};
       userData.streak = resetStreak;
