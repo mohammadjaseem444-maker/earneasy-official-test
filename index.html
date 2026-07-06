@@ -81,6 +81,23 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
     "adminLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "wannads_log": { ".read": false, ".write": true },
     "bannedEmails": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$email": { ".read": "auth != null" } },
+    "pendingClaims": {
+      ".read": true,
+      ".write": true
+    },
+    "pendingCoins": {
+      "$uid": {
+        ".write": true,
+        ".read": "auth != null && auth.uid == $uid",
+        "$txId": {
+          ".validate": "newData.hasChildren(['coins']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 1000"
+        }
+      }
+    },
+    "processedTx": {
+      ".write": true,
+      ".read": true
+    },
     "$other": { ".read": false, ".write": false }
   }
 }
@@ -155,15 +172,15 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" media="print" onload="this.media='all'"/>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
 <!-- Monetag SDK — Daily Ads & Daily Bonus -->
-<script async src='//libtl.com/sdk.js' data-zone='10726400' data-sdk='show_10726400' data-sub-id='guest'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10726400' data-sdk='show_10726400'></script>
 <!-- Monetag SDK — Math Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761849' data-sdk='show_10761849' data-sub-id='guest'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761849' data-sdk='show_10761849'></script>
 <!-- Monetag SDK — Captcha Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761857' data-sdk='show_10761857' data-sub-id='guest'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761857' data-sdk='show_10761857'></script>
 <!-- Monetag SDK — Color Match Game -->
-<script async src='//libtl.com/sdk.js' data-zone='10761865' data-sdk='show_10761865' data-sub-id='guest'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761865' data-sdk='show_10761865'></script>
 <!-- Monetag SDK — Tasks (Follow & Earn + View & Earn) -->
-<script async src='//libtl.com/sdk.js' data-zone='10761884' data-sdk='show_10761884' data-sub-id='guest'></script>
+<script async src='//libtl.com/sdk.js' data-zone='10761884' data-sdk='show_10761884'></script>
 <!-- Firebase SDK — loaded in head for early availability -->
 <style>
 :root {
@@ -2983,6 +3000,9 @@ async function enterApp() {
   window._earnEasyListeners = [];
   await checkDailyReset();
 
+  // Postback-based instant coin crediting (Monetag ads/bonus/streak/games)
+  setupPendingCoinsListener();
+
   // Process pending referral rewards — only ONCE per session
   if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
     window._referralRewardsProcessed = true;
@@ -3021,96 +3041,6 @@ async function enterApp() {
         }
       }
     } catch(e) { console.warn('Referral rewards processing error:', e); }
-  }
-
-  // Process pending offerwall coins (Wannads + CPX postback queue)
-  if(firebaseReady && currentUser && !window._pendingCoinsProcessed) {
-    window._pendingCoinsProcessed = true;
-    try {
-      const pendingSnap = await db.ref('pendingCoins/' + currentUser).get();
-      if(pendingSnap && pendingSnap.exists()) {
-        const pending = pendingSnap.val();
-        let totalCoins = 0;
-        const entries = Object.entries(pending);
-        for(const [key, entry] of entries) {
-          if(entry && entry.coins > 0) totalCoins += entry.coins;
-        }
-        if(totalCoins > 0) {
-          // Remove queue FIRST (prevents double processing)
-          await db.ref('pendingCoins/' + currentUser).remove();
-          userData.coins = (userData.coins || 0) + totalCoins;
-          userData.todayEarned = (userData.todayEarned || 0) + totalCoins;
-          if(!userData.notifications) userData.notifications = [];
-          userData.notifications.unshift({
-            title: '✅ Task Reward!',
-            msg: `Offerwall tasks complete! +${totalCoins} coins added!`,
-            time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
-            read: false
-          });
-          await db.ref('users/' + currentUser).update({
-            coins: userData.coins,
-            todayEarned: userData.todayEarned
-          });
-          saveLocal();
-          showToast(`🎉 +${totalCoins} task coins added!`);
-          updateNotifBadge();
-        }
-      }
-    } catch(e) { console.warn('Pending coins processing error:', e); }
-  }
-
-  // Real-time pendingCoins listener — instant coins jaise hi postback fire ho
-  if(firebaseReady && currentUser) {
-    const _pendingRef = db.ref('pendingCoins/' + currentUser);
-    _pendingRef.on('value', async snap => {
-      if(snap && snap.exists()) {
-        const pending = snap.val();
-        let totalCoins = 0;
-        const entries = Object.entries(pending);
-        for(const [key, entry] of entries) {
-          if(entry && entry.coins > 0) totalCoins += entry.coins;
-        }
-        if(totalCoins > 0) {
-          // Remove FIRST then add coins
-          await db.ref('pendingCoins/' + currentUser).remove().catch(()=>{});
-          userData.coins = (userData.coins || 0) + totalCoins;
-          userData.todayEarned = (userData.todayEarned || 0) + totalCoins;
-          if(!userData.notifications) userData.notifications = [];
-          userData.notifications.unshift({
-            title: '✅ Coins Added!',
-            msg: `+${totalCoins} coins successfully added!`,
-            time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
-            read: false
-          });
-          await db.ref('users/' + currentUser).update({
-            coins: userData.coins,
-            todayEarned: userData.todayEarned
-          }).catch(()=>{});
-          saveLocal();
-          updateUI();
-          updateNotifBadge();
-          showToast(`🎉 +${totalCoins} coins added!`);
-          _trackAction('ad');
-        }
-      }
-    });
-    window._earnEasyListeners.push(_pendingRef);
-  }
-
-  // Set Monetag SUBID to user's UID for postback tracking
-  if(currentUser) {
-    try {
-      document.querySelectorAll('script[data-sdk^="show_107"]').forEach(s => {
-        s.setAttribute('data-sub-id', currentUser);
-      });
-      if(window._mNTag && window._mNTag.cmd) {
-        window._mNTag.cmd.push(() => {
-          if(typeof window._mNTag.set === 'function') {
-            window._mNTag.set('subid', currentUser);
-          }
-        });
-      }
-    } catch(e) { console.warn('Monetag subid error:', e); }
   }
 
   // Lazy load non-critical features after main UI
@@ -3757,14 +3687,14 @@ function waitForSdk(sdkName, maxWait=8000) {
 // Zone 10761884 = Tasks (Follow & View & Earn)
 // ============================================================
 
-function showDailyAd(callback) {
-  // Zone 10726400 — Daily Ads & Daily Bonus
+function showDailyAd(callback, ymid) {
+  // Zone 10726400 — Daily Ads & Daily Bonus & Streak (shared zone!)
   // Monetag ad runs freely (no overlay interference = proper tracking)
   // If user closes ad before 17s, remaining timer shows
   if (typeof show_10726400 !== 'undefined') {
     const startTime = Date.now();
     const REQUIRED_MS = 17000;
-    show_10726400().then(() => {
+    (ymid ? show_10726400({ ymid }) : show_10726400()).then(() => {
       const elapsed = Date.now() - startTime;
       const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
       if(remaining > 0) {
@@ -3787,40 +3717,43 @@ function showDailyAd(callback) {
   }
 }
 
-function showMathAd(callback) {
+function showMathAd(callback, ymid) {
   // Zone 10761849 — Math Game — no timer overlay, just ad
+  const run = () => (ymid ? show_10761849({ ymid }) : show_10761849());
   if(typeof show_10761849 === 'function') {
-    show_10761849().then(() => callback(true)).catch(e => { console.warn('Math Ad:', e); callback(false); });
+    run().then(() => callback(true)).catch(e => { console.warn('Math Ad:', e); callback(false); });
   } else {
     waitForSdk('show_10761849', 6000).then(loaded => {
       if(loaded && typeof show_10761849 === 'function') {
-        show_10761849().then(() => callback(true)).catch(() => callback(false));
+        run().then(() => callback(true)).catch(() => callback(false));
       } else { callback(false); }
     });
   }
 }
 
-function showCaptchaAd(callback) {
+function showCaptchaAd(callback, ymid) {
   // Zone 10761857 — Captcha Game — no timer, just ad
+  const run = () => (ymid ? show_10761857({ ymid }) : show_10761857());
   if(typeof show_10761857 === 'function') {
-    show_10761857().then(() => callback(true)).catch(e => { console.warn('Captcha Ad:', e); callback(false); });
+    run().then(() => callback(true)).catch(e => { console.warn('Captcha Ad:', e); callback(false); });
   } else {
     waitForSdk('show_10761857', 6000).then(loaded => {
       if(loaded && typeof show_10761857 === 'function') {
-        show_10761857().then(() => callback(true)).catch(() => callback(false));
+        run().then(() => callback(true)).catch(() => callback(false));
       } else { callback(false); }
     });
   }
 }
 
-function showColorAd(callback) {
+function showColorAd(callback, ymid) {
   // Zone 10761865 — Color Match Game — no timer, just ad
+  const run = () => (ymid ? show_10761865({ ymid }) : show_10761865());
   if(typeof show_10761865 === 'function') {
-    show_10761865().then(() => callback(true)).catch(e => { console.warn('Color Ad:', e); callback(false); });
+    run().then(() => callback(true)).catch(e => { console.warn('Color Ad:', e); callback(false); });
   } else {
     waitForSdk('show_10761865', 6000).then(loaded => {
       if(loaded && typeof show_10761865 === 'function') {
-        show_10761865().then(() => callback(true)).catch(() => callback(false));
+        run().then(() => callback(true)).catch(() => callback(false));
       } else { callback(false); }
     });
   }
@@ -3887,10 +3820,11 @@ function gameClaimDecision(claim) {
   const startTime = Date.now();
   const REQUIRED_MS = 17000;
   let adFailed = false;
+  const ymid = generateYmid();
+  registerPendingClaim(ymid, coins, source);
 
   const giveRewardAndNext = () => {
-    // NO client-side addCoins — postback se aayega via real-time listener
-    showToast('⏳ Coins aa rahe hain...');
+    // Coins now come from the postback listener once Monetag confirms.
     _trackAction('game');
     deductGameLimit(limitKey, limitMax);
     const gcOverlay = document.getElementById('cooldownOverlay');
@@ -3940,7 +3874,7 @@ function gameClaimDecision(claim) {
         else newColorRound();
       }, 800);
     }
-  });
+  }, ymid);
 }
 
 function showAdTimer(seconds, onComplete) {
@@ -4029,41 +3963,25 @@ function watchAd() {
   const btn = document.getElementById('watchAdBtn');
   if(btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...'; btn.disabled = true; }
 
+  const ymid = generateYmid();
+  registerPendingClaim(ymid, coinsPerAd, 'Daily Ad');
+
   showDailyAd((completed) => {
     adWatching = false;
     if (completed) {
-      // ATOMIC Firebase transaction - track ad count
-      db.ref('users/' + currentUser + '/adsWatched').transaction(current => {
-        const cur = current || 0;
-        const max = window._appSettings?.maxAds || 30;
-        if (cur >= max) return undefined; // Abort
-        return cur + 1;
-      }).then(result => {
-        if (result.committed) {
-          userData.adsWatched = result.snapshot.val();
-          db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-          // NO client-side addCoins — postback se aayenge via pendingCoins listener
-          showToast('⏳ Ad complete! Coins aa rahe hain...');
-          updateUI();
-          if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
-        } else {
-          userData.adsWatched = maxAdsToday;
-          saveLocal();
-          updateUI();
-          showModal('⛔', 'Daily Limit Reached!', `All ${maxAdsToday} ads watched! Come back tomorrow! 🌅`, 'info');
-          if(btn) { btn.innerHTML = `All ${maxAdsToday} Watched ✓`; btn.disabled = true; }
-        }
-      }).catch(e => {
-        logError(e, 'watchAd');
-        if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
-        showToast('❌ Error. Try again!');
-      });
+      // Coins + adsWatched counter now come ONLY from the postback
+      // listener (setupPendingCoinsListener) once Monetag confirms
+      // the ad was actually watched — never from this client promise.
+      db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
+      _trackAction('ad');
+      showToast('⏳ Confirming with ad network...');
+      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
     } else {
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
     }
     updateUI();
-  });
+  }, ymid);
 }
 
 // ============================================================
@@ -4135,6 +4053,62 @@ function addCoins(amount, source) {
 }
 
 // ============================================================
+// POSTBACK-BASED COIN CREDITING
+// Monetag ads (Daily Ad / Daily Bonus / Streak / Games) now credit
+// coins ONLY when the server-side postback confirms the ad was
+// actually watched — never on the client-side promise alone.
+// Flow: build a unique ymid -> register {coins,source} claim in
+// pendingClaims -> pass ymid to Monetag SDK -> Apps Script postback
+// looks up the claim, writes users/$uid/pendingCoins -> this
+// real-time listener credits coins instantly + removes the entry.
+// ============================================================
+function generateYmid() {
+  return currentUser + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+}
+
+function registerPendingClaim(ymid, coins, source) {
+  if (!firebaseReady || !currentUser || !ymid) return;
+  db.ref('pendingClaims/' + ymid).set({
+    uid: currentUser, coins, source, ts: Date.now()
+  }).catch(e => console.warn('registerPendingClaim error:', e));
+}
+
+let _pendingCoinsRef = null;
+function setupPendingCoinsListener() {
+  if (!firebaseReady || !currentUser) return;
+  if (_pendingCoinsRef) { try { _pendingCoinsRef.off(); } catch(e){} }
+  const ref = db.ref('users/' + currentUser + '/pendingCoins');
+  _pendingCoinsRef = ref;
+  ref.on('child_added', (snap) => {
+    const key = snap.key;
+    const data = snap.val();
+    if (!data || !data.coins || data.coins <= 0) {
+      ref.child(key).remove().catch(()=>{});
+      return;
+    }
+    db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + data.coins).then(result => {
+      if (result.committed) {
+        userData.coins = result.snapshot.val();
+        userData.todayEarned = (userData.todayEarned||0) + data.coins;
+        saveLocal();
+        updateUI();
+        showToast('+' + data.coins + ' Coins Earned! 💰');
+        db.ref('users/' + currentUser + '/todayEarned').transaction(c => (c||0) + data.coins).catch(()=>{});
+        db.ref('users/' + currentUser + '/earnLog').push({amount: data.coins, source: data.source || 'Postback', time: Date.now()}).catch(()=>{});
+        // Daily Ad confirmed by postback — now safe to bump the server-truth counter
+        if (data.source === 'Daily Ad') {
+          db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(r => {
+            if (r.committed) { userData.adsWatched = r.snapshot.val(); updateUI(); }
+          }).catch(()=>{});
+        }
+      }
+    }).catch(e => console.warn('pendingCoins credit error:', e))
+      .finally(() => { ref.child(key).remove().catch(()=>{}); });
+  });
+  window._earnEasyListeners.push(ref);
+}
+
+// ============================================================
 // DAILY BONUS
 // ============================================================
 function claimBonus() {
@@ -4171,25 +4145,28 @@ function showBonusAd() {
   const btn = document.getElementById('bonusBtn');
   if(btn) { btn.textContent = 'Loading Ad...'; btn.disabled = true; btn.style.opacity = '0.7'; }
 
+  const bonusCoins = (window._appSettings && window._appSettings.bonusCoins) ? window._appSettings.bonusCoins : 10;
+  const ymid = generateYmid();
+  registerPendingClaim(ymid, bonusCoins, 'Daily Bonus');
+
   showDailyAd((completed) => {
     if(btn) { btn.disabled = false; btn.style.opacity = '1'; }
     if (completed) {
-      // Mark bonus claimed — NO client-side addCoins, postback se aayega
+      // Coins now come from the postback listener once Monetag confirms.
       userData.bonusClaimed = true;
       if (firebaseReady) {
         const today = getToday();
         db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
         userData.bonusDate = today;
       }
-      saveLocal();
-      showToast('⏳ Bonus ad complete! Coins aa rahe hain...');
+      showModal('🎁', 'Daily Bonus! 🎉', `Your ${bonusCoins} coin bonus is on its way — confirming with ad network!`, 'success');
       updateUI();
       if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
     } else {
       if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your bonus!', 'error');
     }
-  });
+  }, ymid);
 }
 
 // ============================================================
@@ -4285,7 +4262,7 @@ function checkMath(selected, btn, cont) {
     const mathMax = window._appSettings?.mathLimit || 20;
     // Correct answer → show Claim/Cancel modal
     setTimeout(() => {
-      showGameClaimModal((cb) => showMathAd(cb), mathCoins, 'Math Game', 'mathLeft', mathMax);
+      showGameClaimModal((cb, ymid) => showMathAd(cb, ymid), mathCoins, 'Math Game', 'mathLeft', mathMax);
     }, 400);
   } else {
     btn.classList.add('wrong');
@@ -4343,7 +4320,7 @@ function checkCaptcha() {
     const captchaCoins = window._appSettings?.captchaCoins || 6;
     const captchaMax = window._appSettings?.captchaLimit || 20;
     // Correct → show Claim/Cancel
-    showGameClaimModal((cb) => showCaptchaAd(cb), captchaCoins, 'Captcha Game', 'captchaLeft', captchaMax);
+    showGameClaimModal((cb, ymid) => showCaptchaAd(cb, ymid), captchaCoins, 'Captcha Game', 'captchaLeft', captchaMax);
   } else {
     // Wrong: alert only — NO limit, NO coins, NO ad
     document.getElementById('captchaInput').value = '';
@@ -4424,7 +4401,7 @@ function checkColor(color, cell, grid) {
     const colorMax = window._appSettings?.colorLimit || 20;
     // Correct → show Claim/Cancel
     setTimeout(() => {
-      showGameClaimModal((cb) => showColorAd(cb), colorCoins, 'Color Game', 'colorLeft', colorMax);
+      showGameClaimModal((cb, ymid) => showColorAd(cb, ymid), colorCoins, 'Color Game', 'colorLeft', colorMax);
     }, 400);
   } else {
     cell.classList.add('wrong-cell');
@@ -5652,15 +5629,21 @@ async function claimStreakDay() {
 
   const dayNum = Math.min((s.count || 0) + 1, 7);
   const adRequired = STREAK_AD_REQUIRED[dayNum] !== false;
+  const newCount = Math.min((s.count || 0) + 1, 7);
+  const coins = STREAK_COINS[newCount] || 3;
+  let coinsPendingViaPostback = false;
 
   if(adRequired) {
     showToast('📺 Ad dekho aur streak claim karo!');
+    const ymid = generateYmid();
+    registerPendingClaim(ymid, coins, 'Streak Day ' + newCount);
+    coinsPendingViaPostback = true;
     try {
       await new Promise((resolve) => {
         if(typeof show_10726400 !== 'function') { resolve(); return; }
         const startTime = Date.now();
         const REQUIRED_MS = 17000;
-        show_10726400().then(() => {
+        show_10726400({ ymid }).then(() => {
           const elapsed = Date.now() - startTime;
           const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
           if(remaining > 0) {
@@ -5679,32 +5662,31 @@ async function claimStreakDay() {
     showToast('🎁 Free claim! Streak reward mil raha hai!');
   }
 
-  // Ad done — give reward via streak update only, NO client-side addCoins
-  const newCount = Math.min((s.count || 0) + 1, 7);
-  const coins = STREAK_COINS[newCount] || 3;
-
   const newStreak = {
     count: newCount,
     lastDay: today,
     claimedToday: true,
-    lastClaimTime: Date.now()
+    lastClaimTime: Date.now() // Anti-scam timestamp
   };
 
   userData.streak = newStreak;
   await db.ref('users/' + currentUser + '/streak').set(newStreak);
 
-  // Streak coins via Firebase directly (streak is admin-controlled, not postback)
-  window._trustedCoinUpdate = true;
-  await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
-  userData.coins = (userData.coins||0) + coins;
-  window._trustedCoinUpdate = false;
+  if (!coinsPendingViaPostback) {
+    // No ad involved (free-claim day) — safe to credit instantly
+    window._trustedCoinUpdate = true;
+    await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
+    userData.coins = (userData.coins||0) + coins;
+    window._trustedCoinUpdate = false;
+  }
+  // Else: coins arrive via the pendingCoins postback listener
 
-  saveLocal();
   updateUI();
   renderStreak(newStreak);
 
   if(newCount === 7) {
     showModal('🎁', '7 Day Streak Complete!', 'Wah bhai! Poore 7 din! +50 coins mile! Streak reset hoga kal se dobara shuru kar!', 'success');
+    // Reset for next cycle — claimedToday: false so Day 1 is available tomorrow
     setTimeout(async () => {
       const resetStreak = {count: 0, lastDay: today, claimedToday: false};
       userData.streak = resetStreak;
