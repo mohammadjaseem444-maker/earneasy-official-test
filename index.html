@@ -4073,37 +4073,64 @@ function registerPendingClaim(ymid, coins, source) {
   }).catch(e => console.warn('registerPendingClaim error:', e));
 }
 
+function creditPendingCoinsEntry(ref, key, data) {
+  if (!data || !data.coins || data.coins <= 0) {
+    ref.child(key).remove().catch(()=>{});
+    return;
+  }
+  db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + data.coins).then(result => {
+    if (result.committed) {
+      userData.coins = result.snapshot.val();
+      userData.todayEarned = (userData.todayEarned||0) + data.coins;
+      saveLocal();
+      updateUI();
+      showToast('+' + data.coins + ' Coins Earned! 💰');
+      db.ref('users/' + currentUser + '/todayEarned').transaction(c => (c||0) + data.coins).catch(()=>{});
+      db.ref('users/' + currentUser + '/earnLog').push({amount: data.coins, source: data.source || 'Postback', time: Date.now()}).catch(()=>{});
+      if (data.source === 'Daily Ad') {
+        db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(r => {
+          if (r.committed) { userData.adsWatched = r.snapshot.val(); updateUI(); }
+        }).catch(()=>{});
+      }
+    }
+  }).catch(e => {
+    console.warn('pendingCoins credit error:', e);
+    fbDebugLog('pendingCoins_credit_error', { message: String(e && e.message || e), uid: currentUser, key: key });
+  }).finally(() => { ref.child(key).remove().catch(()=>{}); });
+}
+
+function fbDebugLog(tag, obj) {
+  try {
+    if (!firebaseReady) return;
+    db.ref('debugLog/CLIENT_' + tag + '_' + Date.now()).set(obj || {}).catch(()=>{});
+  } catch(e) {}
+}
+
 let _pendingCoinsRef = null;
 function setupPendingCoinsListener() {
   if (!firebaseReady || !currentUser) return;
   if (_pendingCoinsRef) { try { _pendingCoinsRef.off(); } catch(e){} }
   const ref = db.ref('users/' + currentUser + '/pendingCoins');
   _pendingCoinsRef = ref;
-  ref.on('child_added', (snap) => {
-    const key = snap.key;
-    const data = snap.val();
-    if (!data || !data.coins || data.coins <= 0) {
-      ref.child(key).remove().catch(()=>{});
-      return;
+
+  // Safety sweep — catches any entries already sitting there BEFORE this
+  // listener attaches (covers any edge case where child_added doesn't
+  // replay for pre-existing children, e.g. after a long backgrounded
+  // session in the Telegram WebView).
+  ref.once('value').then(snap => {
+    if (snap.exists()) {
+      snap.forEach(child => { creditPendingCoinsEntry(ref, child.key, child.val()); });
     }
-    db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + data.coins).then(result => {
-      if (result.committed) {
-        userData.coins = result.snapshot.val();
-        userData.todayEarned = (userData.todayEarned||0) + data.coins;
-        saveLocal();
-        updateUI();
-        showToast('+' + data.coins + ' Coins Earned! 💰');
-        db.ref('users/' + currentUser + '/todayEarned').transaction(c => (c||0) + data.coins).catch(()=>{});
-        db.ref('users/' + currentUser + '/earnLog').push({amount: data.coins, source: data.source || 'Postback', time: Date.now()}).catch(()=>{});
-        // Daily Ad confirmed by postback — now safe to bump the server-truth counter
-        if (data.source === 'Daily Ad') {
-          db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(r => {
-            if (r.committed) { userData.adsWatched = r.snapshot.val(); updateUI(); }
-          }).catch(()=>{});
-        }
-      }
-    }).catch(e => console.warn('pendingCoins credit error:', e))
-      .finally(() => { ref.child(key).remove().catch(()=>{}); });
+  }).catch(e => {
+    console.warn('pendingCoins sweep error:', e);
+    fbDebugLog('pendingCoins_sweep_error', { message: String(e && e.message || e), uid: currentUser });
+  });
+
+  ref.on('child_added', (snap) => {
+    creditPendingCoinsEntry(ref, snap.key, snap.val());
+  }, (err) => {
+    console.warn('pendingCoins listener error:', err);
+    fbDebugLog('pendingCoins_listener_error', { message: String(err && err.message || err), uid: currentUser });
   });
   window._earnEasyListeners.push(ref);
 }
@@ -6103,9 +6130,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
