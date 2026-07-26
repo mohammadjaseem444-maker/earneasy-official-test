@@ -3002,6 +3002,7 @@ async function enterApp() {
 
   // Postback-based instant coin crediting (Monetag ads/bonus/streak/games)
   setupPendingCoinsListener();
+  setupClawbackListener();
 
   // Process pending referral rewards — only ONCE per session
   if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
@@ -3775,29 +3776,29 @@ function showColorAd(callback, ymid) {
   }
 }
 
-function showTaskAd(callback) {
+function showTaskAd(callback, ymid) {
   // Zone 10761884 — Follow & Earn = Rewarded INTERSTITIAL
   if(typeof show_10761884 === 'function') {
-    show_10761884().then(() => callback(true)).catch(e => { console.warn('Task Ad:', e); callback(false); });
+    (ymid ? show_10761884({ ymid }) : show_10761884()).then(() => callback(true)).catch(e => { console.warn('Task Ad:', e); callback(false); });
   } else {
     waitForSdk('show_10761884', 6000).then(loaded => {
       if(loaded && typeof show_10761884 === 'function') {
-        show_10761884().then(() => callback(true)).catch(() => callback(false));
+        (ymid ? show_10761884({ ymid }) : show_10761884()).then(() => callback(true)).catch(() => callback(false));
       } else { callback(false); }
     });
   }
 }
 
-function showViewAd(callback) {
-  // Rewarded POPUP — show_10726400('pop')
+function showViewAd(callback, ymid) {
+  // Rewarded POPUP — show_10726400('pop', {ymid})
   // NOTE: Ye function sirf direct user click pe call hona chahiye — async ke baad nahi
   // Warna browser popup block kar deta hai
   if(typeof show_10726400 === 'function') {
-    show_10726400('pop').then(() => callback(true)).catch(e => { console.warn('Popup Ad:', e); callback(false); });
+    (ymid ? show_10726400('pop', { ymid }) : show_10726400('pop')).then(() => callback(true)).catch(e => { console.warn('Popup Ad:', e); callback(false); });
   } else {
     waitForSdk('show_10726400', 6000).then(loaded => {
       if(loaded && typeof show_10726400 === 'function') {
-        show_10726400('pop').then(() => callback(true)).catch(() => callback(false));
+        (ymid ? show_10726400('pop', { ymid }) : show_10726400('pop')).then(() => callback(true)).catch(() => callback(false));
       } else { callback(false); }
     });
   }
@@ -3840,8 +3841,7 @@ function gameClaimDecision(claim) {
   registerPendingClaim(ymid, coins, source);
 
   const giveRewardAndNext = () => {
-    // Monetag's own SDK confirmed this view counted — credit directly.
-    addCoins(coins, source);
+    addCoins(coins, source, ymid);
     _trackAction('game');
     deductGameLimit(limitKey, limitMax);
     const gcOverlay = document.getElementById('cooldownOverlay');
@@ -3882,6 +3882,7 @@ function gameClaimDecision(claim) {
       }
     } else if (ok && !valued) {
       adFailed = true;
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       const ov = document.getElementById('adTimerOverlay');
       if(ov) ov.style.display = 'none';
       showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — no coins this time. Try again shortly!', 'info');
@@ -3892,6 +3893,7 @@ function gameClaimDecision(claim) {
       }, 800);
     } else {
       adFailed = true;
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       const ov = document.getElementById('adTimerOverlay');
       if(ov) ov.style.display = 'none';
       showModal('❌', 'Ad Failed', 'Ad not completed. No coins earned.', 'error');
@@ -4002,16 +4004,18 @@ function watchAd() {
         if (result.committed) {
           userData.adsWatched = result.snapshot.val();
           db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-          addCoins(coinsPerAd, 'Daily Ad');
+          addCoins(coinsPerAd, 'Daily Ad', ymid);
           _trackAction('ad');
         }
         updateUI();
       }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
     } else if (completed && !valued) {
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view (low ad demand right now) — no coins this time. Please try again shortly!', 'info');
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
     } else {
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
     }
@@ -4058,7 +4062,7 @@ function startCooldown(seconds) {
   }
 }
 
-function addCoins(amount, source) {
+function addCoins(amount, source, ymid) {
   if (!firebaseReady || !currentUser) {
     userData.coins = (userData.coins||0) + amount;
     userData.todayEarned = (userData.todayEarned||0) + amount;
@@ -4077,7 +4081,7 @@ function addCoins(amount, source) {
       updateUI();
       showToast('+' + amount + ' Coins Earned! 💰');
       db.ref('users/' + currentUser + '/todayEarned').transaction(c => (c||0) + amount).catch(()=>{});
-      db.ref('users/' + currentUser + '/earnLog').push({amount, source, time: Date.now()}).catch(()=>{});
+      db.ref('users/' + currentUser + '/earnLog').push({amount, source, ymid: ymid || null, time: Date.now()}).catch(()=>{});
     } else {
       showToast('❌ Failed to add coins. Try again!');
     }
@@ -4154,6 +4158,39 @@ function setupPendingCoinsListener() {
   window._earnEasyListeners.push(ref);
 }
 
+// Reversed coins from the reconciliation system (see EarnEasy_Postback_v5.gs
+// reconcilePendingClaims) — shows an in-app toast AND relies on a separate
+// Telegram bot message (sent server-side by Apps Script) for cases where the
+// app isn't open when the clawback happens.
+let _clawbacksRef = null;
+function setupClawbackListener() {
+  if (!firebaseReady || !currentUser) return;
+  if (_clawbacksRef) { try { _clawbacksRef.off(); } catch(e){} }
+  const ref = db.ref('clawbacks/' + currentUser);
+  _clawbacksRef = ref;
+
+  ref.once('value').then(snap => {
+    if (snap.exists()) {
+      snap.forEach(child => { handleClawbackEntry(ref, child.key, child.val()); });
+    }
+  }).catch(e => console.warn('clawbacks sweep error:', e));
+
+  ref.on('child_added', (snap) => {
+    handleClawbackEntry(ref, snap.key, snap.val());
+  }, (err) => console.warn('clawbacks listener error:', err));
+  window._earnEasyListeners.push(ref);
+}
+
+function handleClawbackEntry(ref, key, c) {
+  if (c && typeof c.coins === 'number') {
+    showModal('⚠️', 'Coins Reversed', `${c.coins} coins from "${c.source}" were removed — the ad wasn't fully confirmed by the ad network.`, 'info');
+    db.ref('users/' + currentUser + '/coins').once('value').then(s => {
+      if (s.exists()) { userData.coins = s.val(); updateUI(); }
+    }).catch(()=>{});
+  }
+  ref.child(key).remove().catch(()=>{});
+}
+
 // ============================================================
 // DAILY BONUS
 // ============================================================
@@ -4204,14 +4241,16 @@ function showBonusAd() {
         db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
         userData.bonusDate = today;
       }
-      addCoins(bonusCoins, 'Daily Bonus');
+      addCoins(bonusCoins, 'Daily Bonus', ymid);
       showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
       updateUI();
       if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
     } else if (completed && !valued) {
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
       showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — please try again shortly!', 'info');
     } else {
+      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
       if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your bonus!', 'error');
     }
@@ -4547,7 +4586,7 @@ function renderTasks(tasks, container) {
 }
 
 // Helper: task flow AFTER popup ad already shown (ad adOk=true guaranteed)
-function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlreadyDone) {
+function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlreadyDone, ymid) {
   db.ref('users/' + currentUser + '/completedTasks/' + id).once('value').then(snap => {
     if (snap.exists()) {
       showToast('✅ Task already completed!');
@@ -4598,7 +4637,7 @@ function _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, adAlrea
       db.ref().update(updates).then(() => {
         userData.completedTasks = userData.completedTasks || {};
         userData.completedTasks[id] = Date.now();
-        addCoins(coins, taskType === 'view' ? 'View Task' : 'Follow Task');
+        addCoins(coins, taskType === 'view' ? 'View Task' : 'Follow Task', ymid);
         saveData();
         showModal('✅', 'Task Complete! 🎉', `You earned ${coins} coins!`, 'success');
       }).catch(e => logError(e, 'startTask'));
@@ -4639,9 +4678,13 @@ function startTask(id, coins, duration, link, btn, showAd) {
     btn.onclick = null;
     btn.textContent = '⏳ Ad...';
 
+    const popupYmid = generateYmid();
+    registerPendingClaim(popupYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task');
+
     // Popup TURANT call karo — user gesture abhi valid hai
     showViewAd((adOk) => {
       if (!adOk) {
+        db.ref('pendingClaims/' + popupYmid).remove().catch(()=>{});
         btn.className = 'btn-task start';
         btn.textContent = 'START';
         btn.onclick = () => {
@@ -4653,8 +4696,8 @@ function startTask(id, coins, duration, link, btn, showAd) {
         return;
       }
       // Ad done — ab Firebase check + link + timer
-      _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true);
-    });
+      _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true, popupYmid);
+    }, popupYmid);
     return;
   }
 
@@ -4704,6 +4747,7 @@ function startTask(id, coins, duration, link, btn, showAd) {
 
     // Give reward function — only once
     let taskCompleted = false;
+    let interstitialYmid = null;
     const giveReward = () => {
       if(taskCompleted) return;
       taskCompleted = true;
@@ -4714,7 +4758,7 @@ function startTask(id, coins, duration, link, btn, showAd) {
       db.ref().update(updates).then(() => {
         userData.completedTasks = userData.completedTasks || {};
         userData.completedTasks[id] = Date.now();
-        addCoins(coins, taskType === 'view' ? 'View Task' : 'Follow Task');
+        addCoins(coins, taskType === 'view' ? 'View Task' : 'Follow Task', interstitialYmid);
         saveData();
         showModal('✅', 'Task Complete! 🎉', `You earned ${coins} coins!`, 'success');
       }).catch(e => logError(e, 'startTask'));
@@ -4741,9 +4785,12 @@ function startTask(id, coins, duration, link, btn, showAd) {
       }, 1000);
 
       // 3. Start ad immediately — use showTaskAd for interstitial
+      interstitialYmid = generateYmid();
+      registerPendingClaim(interstitialYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task');
       showTaskAd((ok) => {
         if(!ok) {
           // Ad failed — reset button
+          db.ref('pendingClaims/' + interstitialYmid).remove().catch(()=>{});
           clearInterval(taskTimer);
           taskCompleted = false;
           showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
@@ -4757,7 +4804,7 @@ function startTask(id, coins, duration, link, btn, showAd) {
         }
         adDone = true;
         checkBothDone();
-      });
+      }, interstitialYmid);
 
     } else {
       // No ad — link + timer simultaneously
@@ -5681,11 +5728,12 @@ async function claimStreakDay() {
   const newCount = Math.min((s.count || 0) + 1, 7);
   const coins = STREAK_COINS[newCount] || 3;
   let valuedAd = true; // free-claim days count as "valued" (no ad needed)
+  let ymid = null;
 
   if(adRequired) {
     showToast('📺 Ad dekho aur streak claim karo!');
-    const ymid = generateYmid();
-    registerPendingClaim(ymid, coins, 'Streak Day ' + newCount); // audit trail only
+    ymid = generateYmid();
+    registerPendingClaim(ymid, coins, 'Streak Day ' + newCount);
     valuedAd = false;
     try {
       await new Promise((resolve) => {
@@ -5714,6 +5762,7 @@ async function claimStreakDay() {
   }
 
   if (!valuedAd) {
+    if (ymid) db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
     showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — please try claiming again shortly!', 'info');
     return;
   }
@@ -6156,9 +6205,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
