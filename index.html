@@ -3002,7 +3002,6 @@ async function enterApp() {
 
   // Postback-based instant coin crediting (Monetag ads/bonus/streak/games)
   setupPendingCoinsListener();
-  setupClawbackListener();
 
   // Process pending referral rewards — only ONCE per session
   if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
@@ -3870,30 +3869,10 @@ function gameClaimDecision(claim) {
     }
   };
 
-  adFunc((ok, valued) => {
-    if(ok && valued) {
-      const elapsed = Date.now() - startTime;
-      const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
-      if(remaining > 0) {
-        // Closed early — show remaining timer then reward
-        showAdTimer(remaining, () => giveRewardAndNext());
-      } else {
-        giveRewardAndNext();
-      }
-    } else if (ok && !valued) {
+  adFunc((ok) => {
+    if (!ok) {
       adFailed = true;
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
-      const ov = document.getElementById('adTimerOverlay');
-      if(ov) ov.style.display = 'none';
-      showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — no coins this time. Try again shortly!', 'info');
-      setTimeout(() => {
-        if(source.includes('Math')) newMathQuestion();
-        else if(source.includes('Captcha')) newCaptcha();
-        else newColorRound();
-      }, 800);
-    } else {
-      adFailed = true;
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
+      cancelPendingClaim(ymid);
       const ov = document.getElementById('adTimerOverlay');
       if(ov) ov.style.display = 'none';
       showModal('❌', 'Ad Failed', 'Ad not completed. No coins earned.', 'error');
@@ -3902,7 +3881,32 @@ function gameClaimDecision(claim) {
         else if(source.includes('Captcha')) newCaptcha();
         else newColorRound();
       }, 800);
+      return;
     }
+    // Ad flow finished — wait for server-side postback confirmation
+    // before crediting (never trust the client result alone).
+    waitForClaimConfirmation(ymid, coins, source).then((confirmed) => {
+      if (!confirmed) {
+        adFailed = true;
+        const ov = document.getElementById('adTimerOverlay');
+        if(ov) ov.style.display = 'none';
+        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — no coins this time. Try again shortly!', 'info');
+        setTimeout(() => {
+          if(source.includes('Math')) newMathQuestion();
+          else if(source.includes('Captcha')) newCaptcha();
+          else newColorRound();
+        }, 800);
+        return;
+      }
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
+      if(remaining > 0) {
+        // Closed early — show remaining timer then reward
+        showAdTimer(remaining, () => giveRewardAndNext());
+      } else {
+        giveRewardAndNext();
+      }
+    });
   }, ymid);
 }
 
@@ -3993,33 +3997,38 @@ function watchAd() {
   if(btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...'; btn.disabled = true; }
 
   const ymid = generateYmid();
-  registerPendingClaim(ymid, coinsPerAd, 'Daily Ad'); // kept for backend audit trail only
+  registerPendingClaim(ymid, coinsPerAd, 'Daily Ad');
 
-  showDailyAd((completed, valued) => {
-    adWatching = false;
-    if (completed && valued) {
-      // Monetag's own SDK confirmed this view counted — credit directly,
-      // no need to wait on a server postback round-trip.
-      db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
-        if (result.committed) {
-          userData.adsWatched = result.snapshot.val();
-          db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-          addCoins(coinsPerAd, 'Daily Ad', ymid);
-          _trackAction('ad');
-        }
-        updateUI();
-      }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
-      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
-    } else if (completed && !valued) {
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
-      showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view (low ad demand right now) — no coins this time. Please try again shortly!', 'info');
-      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
-    } else {
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
+  showDailyAd((completed) => {
+    if (!completed) {
+      adWatching = false;
+      cancelPendingClaim(ymid);
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
+      updateUI();
+      return;
     }
-    updateUI();
+    // Ad flow finished — never trust the client-side result alone. Wait for
+    // the ad network's own server-side postback to confirm before crediting.
+    if(btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Confirming...';
+    waitForClaimConfirmation(ymid, coinsPerAd, 'Daily Ad').then((confirmed) => {
+      adWatching = false;
+      if (confirmed) {
+        db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
+          if (result.committed) {
+            userData.adsWatched = result.snapshot.val();
+            db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
+            addCoins(coinsPerAd, 'Daily Ad', ymid);
+            _trackAction('ad');
+          }
+          updateUI();
+        }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
+      } else {
+        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — no coins this time. Please try again shortly!', 'info');
+      }
+      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
+      updateUI();
+    });
   }, ymid);
 }
 
@@ -4092,14 +4101,22 @@ function addCoins(amount, source, ymid) {
 }
 
 // ============================================================
-// POSTBACK-BASED COIN CREDITING
-// Monetag ads (Daily Ad / Daily Bonus / Streak / Games) now credit
-// coins ONLY when the server-side postback confirms the ad was
-// actually watched — never on the client-side promise alone.
-// Flow: build a unique ymid -> register {coins,source} claim in
-// pendingClaims -> pass ymid to Monetag SDK -> Apps Script postback
-// looks up the claim, writes users/$uid/pendingCoins -> this
-// real-time listener credits coins instantly + removes the entry.
+// POSTBACK-CONFIRMED COIN CREDITING
+// No ad-flow ever credits coins on the client-side Promise/result
+// alone (that "valued" flag turned out to be unreliable — it defaulted
+// to true whenever Monetag omitted reward_event_type, which is exactly
+// what let skipped ads get credited). Real flow now:
+//   1. generateYmid() + registerPendingClaim() -> pendingClaims/{ymid}
+//   2. pass ymid to the Monetag SDK call
+//   3. Apps Script postback (EarnEasy_Postback_v7.gs) verifies the
+//      postback's own value/event params server-side, and ONLY THEN
+//      writes claimConfirmations/{ymid}
+//   4. waitForClaimConfirmation() below listens for that node and
+//      credits coins the instant it appears — usually within a few
+//      seconds, same as before from the user's point of view, but now
+//      gated on a real server confirmation instead of a guess.
+// No reconciliation/clawback anymore — nothing is credited until it's
+// actually confirmed, so there's nothing to take back later.
 // ============================================================
 function generateYmid() {
   return currentUser + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
@@ -4112,14 +4129,8 @@ function registerPendingClaim(ymid, coins, source) {
   }).catch(e => console.warn('registerPendingClaim error:', e));
 }
 
-function creditPendingCoinsEntry(ref, key, data) {
-  // NOTE: Frontend (Monetag Promise result) is now the PRIMARY way coins
-  // get credited — see showDailyAd/showMathAd/etc + their callers. This
-  // listener used to also credit from here, but that risked DOUBLE
-  // crediting once frontend crediting was added. It now just clears the
-  // entry (the postback pipeline still exists for admin audit purposes
-  // via debugLog/processedTx, so nothing is lost).
-  ref.child(key).remove().catch(()=>{});
+function cancelPendingClaim(ymid) {
+  if (ymid) db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
 }
 
 function fbDebugLog(tag, obj) {
@@ -4129,6 +4140,46 @@ function fbDebugLog(tag, obj) {
   } catch(e) {}
 }
 
+// Waits for the Apps Script postback handler to confirm this exact ymid.
+// Resolves with the confirmation data as soon as it arrives, or null if
+// timeoutMs passes with no confirmation. Also logs the real-world latency
+// to debugLog every time (tag CLIENT_claim_latency) so we can see actual
+// Monetag postback timing from real users instead of guessing.
+function waitForClaimConfirmation(ymid, coins, source, timeoutMs) {
+  timeoutMs = timeoutMs || 45000;
+  const startedAt = Date.now();
+  return new Promise((resolve) => {
+    if (!firebaseReady || !currentUser || !ymid) { resolve(null); return; }
+    const ref = db.ref('claimConfirmations/' + ymid);
+    let done = false;
+    let timer = null;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { ref.off('value', listener); } catch(e){}
+      fbDebugLog('claim_latency', {
+        ymid, source: source || null, coins: coins || null,
+        confirmed: !!val, elapsedMs: Date.now() - startedAt
+      });
+      if (val) ref.remove().catch(()=>{});
+      resolve(val);
+    };
+    const listener = ref.on('value', (snap) => {
+      const val = snap.val();
+      if (val) finish(val);
+    }, () => finish(null));
+    timer = setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
+function creditPendingCoinsEntry(ref, key, data) {
+  // Unrelated to the Monetag fix above — this is the legacy Wannads/CPX
+  // audit-trail node (users/$uid/pendingCoins). Left exactly as it was,
+  // just clears the entry. Not touched by today's fix.
+  ref.child(key).remove().catch(()=>{});
+}
+
 let _pendingCoinsRef = null;
 function setupPendingCoinsListener() {
   if (!firebaseReady || !currentUser) return;
@@ -4136,10 +4187,6 @@ function setupPendingCoinsListener() {
   const ref = db.ref('users/' + currentUser + '/pendingCoins');
   _pendingCoinsRef = ref;
 
-  // Safety sweep — catches any entries already sitting there BEFORE this
-  // listener attaches (covers any edge case where child_added doesn't
-  // replay for pre-existing children, e.g. after a long backgrounded
-  // session in the Telegram WebView).
   ref.once('value').then(snap => {
     if (snap.exists()) {
       snap.forEach(child => { creditPendingCoinsEntry(ref, child.key, child.val()); });
@@ -4156,39 +4203,6 @@ function setupPendingCoinsListener() {
     fbDebugLog('pendingCoins_listener_error', { message: String(err && err.message || err), uid: currentUser });
   });
   window._earnEasyListeners.push(ref);
-}
-
-// Reversed coins from the reconciliation system (see EarnEasy_Postback_v5.gs
-// reconcilePendingClaims) — shows an in-app toast AND relies on a separate
-// Telegram bot message (sent server-side by Apps Script) for cases where the
-// app isn't open when the clawback happens.
-let _clawbacksRef = null;
-function setupClawbackListener() {
-  if (!firebaseReady || !currentUser) return;
-  if (_clawbacksRef) { try { _clawbacksRef.off(); } catch(e){} }
-  const ref = db.ref('clawbacks/' + currentUser);
-  _clawbacksRef = ref;
-
-  ref.once('value').then(snap => {
-    if (snap.exists()) {
-      snap.forEach(child => { handleClawbackEntry(ref, child.key, child.val()); });
-    }
-  }).catch(e => console.warn('clawbacks sweep error:', e));
-
-  ref.on('child_added', (snap) => {
-    handleClawbackEntry(ref, snap.key, snap.val());
-  }, (err) => console.warn('clawbacks listener error:', err));
-  window._earnEasyListeners.push(ref);
-}
-
-function handleClawbackEntry(ref, key, c) {
-  if (c && typeof c.coins === 'number') {
-    showModal('⚠️', 'Coins Reversed', `${c.coins} coins from "${c.source}" were removed — the ad wasn't fully confirmed by the ad network.`, 'info');
-    db.ref('users/' + currentUser + '/coins').once('value').then(s => {
-      if (s.exists()) { userData.coins = s.val(); updateUI(); }
-    }).catch(()=>{});
-  }
-  ref.child(key).remove().catch(()=>{});
 }
 
 // ============================================================
@@ -4232,28 +4246,32 @@ function showBonusAd() {
   const ymid = generateYmid();
   registerPendingClaim(ymid, bonusCoins, 'Daily Bonus');
 
-  showDailyAd((completed, valued) => {
-    if(btn) { btn.disabled = false; btn.style.opacity = '1'; }
-    if (completed && valued) {
-      userData.bonusClaimed = true;
-      if (firebaseReady) {
-        const today = getToday();
-        db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
-        userData.bonusDate = today;
-      }
-      addCoins(bonusCoins, 'Daily Bonus', ymid);
-      showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
-      updateUI();
-      if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
-    } else if (completed && !valued) {
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
-      if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
-      showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — please try again shortly!', 'info');
-    } else {
-      db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
-      if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
+  showDailyAd((completed) => {
+    if (!completed) {
+      cancelPendingClaim(ymid);
+      if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your bonus!', 'error');
+      return;
     }
+    if(btn) btn.textContent = 'Confirming...';
+    waitForClaimConfirmation(ymid, bonusCoins, 'Daily Bonus').then((confirmed) => {
+      if(btn) { btn.disabled = false; btn.style.opacity = '1'; }
+      if (confirmed) {
+        userData.bonusClaimed = true;
+        if (firebaseReady) {
+          const today = getToday();
+          db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
+          userData.bonusDate = today;
+        }
+        addCoins(bonusCoins, 'Daily Bonus', ymid);
+        showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
+        updateUI();
+        if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
+      } else {
+        if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
+        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again shortly!', 'info');
+      }
+    });
   }, ymid);
 }
 
@@ -4684,7 +4702,7 @@ function startTask(id, coins, duration, link, btn, showAd) {
     // Popup TURANT call karo — user gesture abhi valid hai
     showViewAd((adOk) => {
       if (!adOk) {
-        db.ref('pendingClaims/' + popupYmid).remove().catch(()=>{});
+        cancelPendingClaim(popupYmid);
         btn.className = 'btn-task start';
         btn.textContent = 'START';
         btn.onclick = () => {
@@ -4695,8 +4713,23 @@ function startTask(id, coins, duration, link, btn, showAd) {
         showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
         return;
       }
-      // Ad done — ab Firebase check + link + timer
-      _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true, popupYmid);
+      // Ad flow finished — wait for server confirmation before proceeding
+      btn.textContent = '⏳ Confirming...';
+      waitForClaimConfirmation(popupYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task').then((confirmed) => {
+        if (!confirmed) {
+          btn.className = 'btn-task start';
+          btn.textContent = 'START';
+          btn.onclick = () => {
+            window._currentTaskType = taskType;
+            window._currentTaskAdType = taskAdType;
+            startTask(id, coins, duration, link, btn, showAd);
+          };
+          showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again!', 'info');
+          return;
+        }
+        // Confirmed — ab Firebase check + link + timer
+        _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true, popupYmid);
+      });
     }, popupYmid);
     return;
   }
@@ -4790,7 +4823,7 @@ function startTask(id, coins, duration, link, btn, showAd) {
       showTaskAd((ok) => {
         if(!ok) {
           // Ad failed — reset button
-          db.ref('pendingClaims/' + interstitialYmid).remove().catch(()=>{});
+          cancelPendingClaim(interstitialYmid);
           clearInterval(taskTimer);
           taskCompleted = false;
           showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
@@ -4802,8 +4835,24 @@ function startTask(id, coins, duration, link, btn, showAd) {
           };
           return;
         }
-        adDone = true;
-        checkBothDone();
+        // Ad flow finished — wait for server confirmation before letting
+        // giveReward() (gated behind checkBothDone) fire.
+        waitForClaimConfirmation(interstitialYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task').then((confirmed) => {
+          if (!confirmed) {
+            clearInterval(taskTimer);
+            taskCompleted = false;
+            showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again!', 'info');
+            btn.className = 'btn-task start'; btn.textContent = 'START';
+            btn.onclick = () => {
+              window._currentTaskType = taskType;
+              window._currentTaskAdType = taskAdType;
+              startTask(id, coins, duration, link, btn, showAd);
+            };
+            return;
+          }
+          adDone = true;
+          checkBothDone();
+        });
       }, interstitialYmid);
 
     } else {
@@ -5727,21 +5776,22 @@ async function claimStreakDay() {
   const adRequired = STREAK_AD_REQUIRED[dayNum] !== false;
   const newCount = Math.min((s.count || 0) + 1, 7);
   const coins = STREAK_COINS[newCount] || 3;
-  let valuedAd = true; // free-claim days count as "valued" (no ad needed)
+  let confirmed = true; // free-claim days don't need an ad
   let ymid = null;
 
   if(adRequired) {
     showToast('📺 Ad dekho aur streak claim karo!');
     ymid = generateYmid();
     registerPendingClaim(ymid, coins, 'Streak Day ' + newCount);
-    valuedAd = false;
+    confirmed = false;
+    let adOk = false;
     try {
       await new Promise((resolve) => {
         if(typeof show_10726400 !== 'function') { resolve(); return; }
         const startTime = Date.now();
         const REQUIRED_MS = 17000;
         show_10726400({ ymid }).then((result) => {
-          valuedAd = !result || result.reward_event_type === undefined || result.reward_event_type === 'valued';
+          adOk = true;
           const elapsed = Date.now() - startTime;
           const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
           if(remaining > 0) {
@@ -5752,18 +5802,26 @@ async function claimStreakDay() {
         }).catch(() => {
           const ov = document.getElementById('adTimerOverlay');
           if(ov) ov.style.display = 'none';
-          valuedAd = false;
+          adOk = false;
           resolve();
         });
       });
     } catch(e) {}
+
+    if (!adOk) {
+      cancelPendingClaim(ymid);
+      showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your streak!', 'error');
+      return;
+    }
+    // Ad flow finished — wait for server-side postback confirmation
+    const confirmedData = await waitForClaimConfirmation(ymid, coins, 'Streak Day ' + newCount);
+    confirmed = !!confirmedData;
   } else {
     showToast('🎁 Free claim! Streak reward mil raha hai!');
   }
 
-  if (!valuedAd) {
-    if (ymid) db.ref('pendingClaims/' + ymid).remove().catch(()=>{});
-    showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t validate this view — please try claiming again shortly!', 'info');
+  if (!confirmed) {
+    showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try claiming again shortly!', 'info');
     return;
   }
 
@@ -5777,7 +5835,7 @@ async function claimStreakDay() {
   userData.streak = newStreak;
   await db.ref('users/' + currentUser + '/streak').set(newStreak);
 
-  // Monetag confirmed valued (or it was a free-claim day) — safe to credit
+  // Postback confirmed (or it was a free-claim day) — safe to credit
   window._trustedCoinUpdate = true;
   await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
   userData.coins = (userData.coins||0) + coins;
@@ -6205,9 +6263,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
