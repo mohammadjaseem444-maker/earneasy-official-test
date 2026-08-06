@@ -172,6 +172,7 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" media="print" onload="this.media='all'"/>
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'"/>
 <!-- Monetag SDK — Daily Ads & Daily Bonus -->
+<script src="https://js.onclckvd.com/in-stream-ad-admanager/tma.js"></script>
 <script async src='//libtl.com/sdk.js' data-zone='10726400' data-sdk='show_10726400'></script>
 <!-- Monetag SDK — Math Game -->
 <script async src='//libtl.com/sdk.js' data-zone='10761849' data-sdk='show_10761849'></script>
@@ -3972,6 +3973,38 @@ function deductGameLimit(limitKey, limitMax) {
   }).catch(() => { saveLocal(); });
 }
 
+// OnClickA TMA Rewarded Video — Daily Ad only, for now. Init once at load.
+window.initCdTma?.({ id: '6123819' }).then(show => { window._onClickAShow = show; }).catch(e => console.log('OnClickA init error:', e));
+
+// Daily Ad now uses OnClickA instead of Monetag. NOTE: no postback wired up
+// yet for OnClickA (Jaseem's explicit call, temporary) — this credits
+// directly on the SDK Promise resolving, same as how Monetag's Daily Ad
+// used to work before the claimConfirmations fix. Still keeps our own
+// local minimum-watch-time timer as a lightweight, non-postback safeguard.
+function showDailyAdOnClickA(callback) {
+  if (typeof window._onClickAShow !== 'function') {
+    console.log('OnClickA not ready yet');
+    callback(false);
+    return;
+  }
+  const startTime = Date.now();
+  const REQUIRED_MS = 17000;
+  window._onClickAShow().then(() => {
+    const elapsed = Date.now() - startTime;
+    const remaining = Math.ceil((REQUIRED_MS - elapsed) / 1000);
+    if (remaining > 0) {
+      showAdTimer(remaining, () => callback(true));
+    } else {
+      callback(true);
+    }
+  }).catch((e) => {
+    console.log('OnClickA show error:', e);
+    const ov = document.getElementById('adTimerOverlay');
+    if (ov) ov.style.display = 'none';
+    callback(false);
+  });
+}
+
 function watchAd() {
   if (!checkRateLimit('watchAd', 2000)) return;
   const maxAdsToday = (window._appSettings && window._appSettings.maxAds) ? window._appSettings.maxAds : 30;
@@ -3996,40 +4029,26 @@ function watchAd() {
   const btn = document.getElementById('watchAdBtn');
   if(btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...'; btn.disabled = true; }
 
-  const ymid = generateYmid();
-  registerPendingClaim(ymid, coinsPerAd, 'Daily Ad');
-
-  showDailyAd((completed) => {
+  showDailyAdOnClickA((completed) => {
+    adWatching = false;
     if (!completed) {
-      adWatching = false;
-      cancelPendingClaim(ymid);
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
       updateUI();
       return;
     }
-    // Ad flow finished — never trust the client-side result alone. Wait for
-    // the ad network's own server-side postback to confirm before crediting.
-    if(btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Confirming...';
-    waitForClaimConfirmation(ymid, coinsPerAd, 'Daily Ad').then((confirmed) => {
-      adWatching = false;
-      if (confirmed) {
-        db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
-          if (result.committed) {
-            userData.adsWatched = result.snapshot.val();
-            db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-            addCoins(coinsPerAd, 'Daily Ad', ymid);
-            _trackAction('ad');
-          }
-          updateUI();
-        }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
-      } else {
-        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — no coins this time. Please try again shortly!', 'info');
+    // No postback wired up for OnClickA yet — credit directly (temporary).
+    db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
+      if (result.committed) {
+        userData.adsWatched = result.snapshot.val();
+        db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
+        addCoins(coinsPerAd, 'Daily Ad', null);
+        _trackAction('ad');
       }
-      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
       updateUI();
-    });
-  }, ymid);
+    }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
+    if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
+  });
 }
 
 // ============================================================
