@@ -3919,20 +3919,9 @@ function gameClaimDecision(claim) {
       setTimeout(nextRound, 800);
       return;
     }
-    // Ad flow finished, genuinely watched — wait for server-side postback
-    // confirmation before crediting (never trust the client result alone).
-    waitForClaimConfirmation(ymid, coins, source).then((confirmed) => {
-      if (!confirmed) {
-        logAdAttempt(source, 'not_confirmed', elapsedMs, null);
-        const ov = document.getElementById('adTimerOverlay');
-        if(ov) ov.style.display = 'none';
-        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — no coins this time. Try again shortly!', 'info');
-        setTimeout(nextRound, 800);
-        return;
-      }
-      logAdAttempt(source, 'credited', elapsedMs, null);
-      giveRewardAndNext();
-    });
+    // Ad flow finished, fraud-watch clear — credit instantly.
+    logAdAttempt(source, 'credited', elapsedMs, null);
+    giveRewardAndNext();
   }, ymid);
 }
 
@@ -4046,27 +4035,22 @@ function watchAd() {
       updateUI();
       return;
     }
-    // Ad flow finished, genuinely watched — wait for the ad network's own
-    // server-side postback to confirm before crediting (extra layer on
-    // top of the fraud-watch above).
-    if(btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Confirming...';
-    waitForClaimConfirmation(ymid, coinsPerAd, 'Daily Ad').then((confirmed) => {
+    // Ad flow finished, fraud-watch clear — credit instantly. Postback wait
+    // removed (registerPendingClaim kept purely as an audit trail now).
+    db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
       adWatching = false;
-      if (confirmed) {
-        db.ref('users/' + currentUser + '/adsWatched').transaction(c => (c||0) + 1).then(result => {
-          if (result.committed) {
-            userData.adsWatched = result.snapshot.val();
-            db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
-            addCoins(coinsPerAd, 'Daily Ad', ymid);
-            logAdAttempt('Daily Ad', 'credited', elapsedMs, null);
-            _trackAction('ad');
-          }
-          updateUI();
-        }).catch(e => { console.warn('adsWatched error:', e); updateUI(); });
-      } else {
-        logAdAttempt('Daily Ad', 'not_confirmed', elapsedMs, null);
-        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — no coins this time. Please try again shortly!', 'info');
+      if (result.committed) {
+        userData.adsWatched = result.snapshot.val();
+        db.ref('users/' + currentUser + '/adsDate').set(getToday()).catch(()=>{});
+        addCoins(coinsPerAd, 'Daily Ad', ymid);
+        logAdAttempt('Daily Ad', 'credited', elapsedMs, null);
+        _trackAction('ad');
       }
+      if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
+      updateUI();
+    }).catch(e => {
+      adWatching = false;
+      console.warn('adsWatched error:', e);
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
       updateUI();
     });
@@ -4142,22 +4126,24 @@ function addCoins(amount, source, ymid) {
 }
 
 // ============================================================
-// POSTBACK-CONFIRMED COIN CREDITING
-// No ad-flow ever credits coins on the client-side Promise/result
-// alone (that "valued" flag turned out to be unreliable — it defaulted
-// to true whenever Monetag omitted reward_event_type, which is exactly
-// what let skipped ads get credited). Real flow now:
+// AD FRAUD-WATCH — COIN CREDITING
+// No ad-flow ever credits coins on the client-side "valued"/reward flag
+// alone (that turned out to be unreliable — Monetag's postback for
+// this zone resolves in ~150-200ms regardless of skip vs full watch,
+// so neither the client Promise nor the server postback can be
+// trusted to mean "genuinely watched"). Real flow now:
 //   1. generateYmid() + registerPendingClaim() -> pendingClaims/{ymid}
-//   2. pass ymid to the Monetag SDK call
-//   3. Apps Script postback (EarnEasy_Postback_v7.gs) verifies the
-//      postback's own value/event params server-side, and ONLY THEN
-//      writes claimConfirmations/{ymid}
-//   4. waitForClaimConfirmation() below listens for that node and
-//      credits coins the instant it appears — usually within a few
-//      seconds, same as before from the user's point of view, but now
-//      gated on a real server confirmation instead of a guess.
-// No reconciliation/clawback anymore — nothing is credited until it's
-// actually confirmed, so there's nothing to take back later.
+//      (kept purely as an audit trail — nothing reads it back anymore)
+//   2. startFraudWatch() — silently detects app losing visibility/focus
+//      during playback (popup, link-open, app-switch — zero grace period)
+//   3. the ad SDK's real elapsed time (before any padding UI) is checked
+//      against AD_REQUIRED_MS — too fast means it wasn't genuinely watched
+//   4. if neither trips, credit instantly. If either trips, zero coins
+//      and the attempt doesn't count toward any daily limit.
+// Every attempt (credited or flagged) is logged to adAttempts/{uid}.
+// Manual Tasks are the one exception — see startTask, no fraud-watch
+// applies there at all (reverted to simple instant-credit, no ymid
+// tracking needed for crediting purposes).
 // ============================================================
 function generateYmid() {
   return currentUser + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
@@ -4212,10 +4198,9 @@ function startFraudWatch() {
   return state;
 }
 
-// Every attempt gets logged — credited, flagged (fraud detected), or
-// not_confirmed (genuine watch, but the ad network never confirmed via
-// postback). fraudFlagCount is a running per-user counter so the admin
-// panel can sort/flag repeat offenders without opening every log entry.
+// Every attempt gets logged — credited or flagged (fraud detected).
+// fraudFlagCount is a running per-user counter so the admin panel can
+// sort/flag repeat offenders without opening every log entry.
 function logAdAttempt(source, outcome, durationMs, reason) {
   if (!firebaseReady || !currentUser) return;
   db.ref('adAttempts/' + currentUser).push({
@@ -4238,10 +4223,8 @@ function fbDebugLog(tag, obj) {
 }
 
 // Waits for the Apps Script postback handler to confirm this exact ymid.
-// Resolves with the confirmation data as soon as it arrives, or null if
-// timeoutMs passes with no confirmation. Also logs the real-world latency
-// to debugLog every time (tag CLIENT_claim_latency) so we can see actual
-// Monetag postback timing from real users instead of guessing.
+// NOT used for crediting anymore (postback proved unreliable — see the
+// comment block above) — kept only in case it's needed again later.
 function waitForClaimConfirmation(ymid, coins, source, timeoutMs) {
   timeoutMs = timeoutMs || 45000;
   const startedAt = Date.now();
@@ -4360,27 +4343,18 @@ function showBonusAd() {
       showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
       return;
     }
-    if(btn) btn.textContent = 'Confirming...';
-    waitForClaimConfirmation(ymid, bonusCoins, 'Daily Bonus').then((confirmed) => {
-      if(btn) { btn.disabled = false; btn.style.opacity = '1'; }
-      if (confirmed) {
-        userData.bonusClaimed = true;
-        if (firebaseReady) {
-          const today = getToday();
-          db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
-          userData.bonusDate = today;
-        }
-        addCoins(bonusCoins, 'Daily Bonus', ymid);
-        logAdAttempt('Daily Bonus', 'credited', elapsedMs, null);
-        showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
-        updateUI();
-        if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
-      } else {
-        logAdAttempt('Daily Bonus', 'not_confirmed', elapsedMs, null);
-        if(btn) { btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
-        showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again shortly!', 'info');
-      }
-    });
+    // Ad flow finished, fraud-watch clear — credit instantly.
+    userData.bonusClaimed = true;
+    if (firebaseReady) {
+      const today = getToday();
+      db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
+      userData.bonusDate = today;
+    }
+    addCoins(bonusCoins, 'Daily Bonus', ymid);
+    logAdAttempt('Daily Bonus', 'credited', elapsedMs, null);
+    showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
+    updateUI();
+    if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
   }, ymid);
 }
 
@@ -4806,19 +4780,10 @@ function startTask(id, coins, duration, link, btn, showAd) {
     btn.textContent = '⏳ Ad...';
 
     const popupYmid = generateYmid();
-    registerPendingClaim(popupYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task');
-    // Popup variant: the task's link only opens AFTER this ad is confirmed
-    // (see _startTaskAfterAd), so the ad plays in isolation here — full
-    // fraud-watch (visibility + fast-resolve) applies, same as the other
-    // non-Task flows.
-    const watch = startFraudWatch();
 
     // Popup TURANT call karo — user gesture abhi valid hai
-    showViewAd((adOk, elapsedMs) => {
-      watch.stop();
+    showViewAd((adOk) => {
       if (!adOk) {
-        cancelPendingClaim(popupYmid);
-        logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'flagged', elapsedMs, 'sdk_error');
         btn.className = 'btn-task start';
         btn.textContent = 'START';
         btn.onclick = () => {
@@ -4829,38 +4794,8 @@ function startTask(id, coins, duration, link, btn, showAd) {
         showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
         return;
       }
-      if (watch.flagged || elapsedMs < AD_REQUIRED_MS) {
-        cancelPendingClaim(popupYmid);
-        logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'flagged', elapsedMs, watch.reason || 'quick_resolve');
-        btn.className = 'btn-task start';
-        btn.textContent = 'START';
-        btn.onclick = () => {
-          window._currentTaskType = taskType;
-          window._currentTaskAdType = taskAdType;
-          startTask(id, coins, duration, link, btn, showAd);
-        };
-        showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
-        return;
-      }
-      // Ad flow finished — wait for server confirmation before proceeding
-      btn.textContent = '⏳ Confirming...';
-      waitForClaimConfirmation(popupYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task').then((confirmed) => {
-        if (!confirmed) {
-          logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'not_confirmed', elapsedMs, null);
-          btn.className = 'btn-task start';
-          btn.textContent = 'START';
-          btn.onclick = () => {
-            window._currentTaskType = taskType;
-            window._currentTaskAdType = taskAdType;
-            startTask(id, coins, duration, link, btn, showAd);
-          };
-          showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again!', 'info');
-          return;
-        }
-        logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'credited', elapsedMs, null);
-        // Confirmed — ab Firebase check + link + timer
-        _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true, popupYmid);
-      });
+      // Ad done — ab Firebase check + link + timer
+      _startTaskAfterAd(id, coins, taskDuration, link, btn, taskType, true, popupYmid);
     }, popupYmid);
     return;
   }
@@ -4948,19 +4883,11 @@ function startTask(id, coins, duration, link, btn, showAd) {
         if(t <= 0) { clearInterval(taskTimer); timerDone = true; checkBothDone(); }
       }, 1000);
 
-      // 3. Start ad immediately — use showTaskAd for interstitial.
-      // NOTE: no visibility-watch here — openTaskLink() above deliberately
-      // navigates away as part of a normal task completion, so a
-      // visibility-loss check would false-flag every genuine user. Only
-      // the fast-resolve check (ad SDK promise resolving suspiciously
-      // fast) applies to this variant.
+      // 3. Start ad immediately — use showTaskAd for interstitial
       interstitialYmid = generateYmid();
-      registerPendingClaim(interstitialYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task');
-      showTaskAd((ok, elapsedMs) => {
+      showTaskAd((ok) => {
         if(!ok) {
           // Ad failed — reset button
-          cancelPendingClaim(interstitialYmid);
-          logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'flagged', elapsedMs, 'sdk_error');
           clearInterval(taskTimer);
           taskCompleted = false;
           showModal('❌', 'Ad Not Completed', 'Please watch the full ad to earn coins!', 'error');
@@ -4972,40 +4899,8 @@ function startTask(id, coins, duration, link, btn, showAd) {
           };
           return;
         }
-        if (elapsedMs < AD_REQUIRED_MS) {
-          cancelPendingClaim(interstitialYmid);
-          logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'flagged', elapsedMs, 'quick_resolve');
-          clearInterval(taskTimer);
-          taskCompleted = false;
-          showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
-          btn.className = 'btn-task start'; btn.textContent = 'START';
-          btn.onclick = () => {
-            window._currentTaskType = taskType;
-            window._currentTaskAdType = taskAdType;
-            startTask(id, coins, duration, link, btn, showAd);
-          };
-          return;
-        }
-        // Ad flow finished — wait for server confirmation before letting
-        // giveReward() (gated behind checkBothDone) fire.
-        waitForClaimConfirmation(interstitialYmid, coins, taskType === 'view' ? 'View Task' : 'Follow Task').then((confirmed) => {
-          if (!confirmed) {
-            logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'not_confirmed', elapsedMs, null);
-            clearInterval(taskTimer);
-            taskCompleted = false;
-            showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try again!', 'info');
-            btn.className = 'btn-task start'; btn.textContent = 'START';
-            btn.onclick = () => {
-              window._currentTaskType = taskType;
-              window._currentTaskAdType = taskAdType;
-              startTask(id, coins, duration, link, btn, showAd);
-            };
-            return;
-          }
-          logAdAttempt(taskType === 'view' ? 'View Task' : 'Follow Task', 'credited', elapsedMs, null);
-          adDone = true;
-          checkBothDone();
-        });
+        adDone = true;
+        checkBothDone();
       }, interstitialYmid);
 
     } else {
@@ -5929,7 +5824,6 @@ async function claimStreakDay() {
   const adRequired = STREAK_AD_REQUIRED[dayNum] !== false;
   const newCount = Math.min((s.count || 0) + 1, 7);
   const coins = STREAK_COINS[newCount] || 3;
-  let confirmed = true; // free-claim days don't need an ad
   let ymid = null;
   let streakElapsed = null;
 
@@ -5937,7 +5831,6 @@ async function claimStreakDay() {
     showToast('📺 Ad dekho aur streak claim karo!');
     ymid = generateYmid();
     registerPendingClaim(ymid, coins, 'Streak Day ' + newCount);
-    confirmed = false;
     let adOk = false;
     const watch = startFraudWatch();
     try {
@@ -5977,17 +5870,10 @@ async function claimStreakDay() {
       showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
       return;
     }
-    // Ad flow finished, genuinely watched — wait for server-side postback confirmation
-    const confirmedData = await waitForClaimConfirmation(ymid, coins, 'Streak Day ' + newCount);
-    confirmed = !!confirmedData;
-    logAdAttempt('Streak Day ' + newCount, confirmed ? 'credited' : 'not_confirmed', streakElapsed, null);
+    // Ad flow finished, fraud-watch clear — credit instantly.
+    logAdAttempt('Streak Day ' + newCount, 'credited', streakElapsed, null);
   } else {
     showToast('🎁 Free claim! Streak reward mil raha hai!');
-  }
-
-  if (!confirmed) {
-    showModal('⚠️', 'Ad Not Counted', 'Ad network didn\'t confirm this view — please try claiming again shortly!', 'info');
-    return;
   }
 
   const newStreak = {
@@ -6428,9 +6314,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
