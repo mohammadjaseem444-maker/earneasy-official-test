@@ -4185,14 +4185,19 @@ function startFraudWatch() {
   const state = { flagged: false, reason: null };
   const flag = (reason) => { if (!state.flagged) { state.flagged = true; state.reason = reason; } };
   const onVisibility = () => { if (document.hidden) flag('visibility_lost'); };
-  const onBlur = () => flag('window_blur');
   const onPageHide = () => flag('page_hide');
+  // NOTE: window 'blur' was removed — Monetag's own ad player fires it on
+  // ANY interaction with the ad (even a legitimate close-button tap),
+  // making it useless as a fraud signal here (confirmed via adAttempts
+  // logs: every flagged attempt, watched or skipped, had reason
+  // window_blur). visibilitychange + pagehide only fire on a genuine
+  // navigation-away (Chrome popup, external link, app-switch) — that's
+  // what actually matters, and neither has a grace period: even a split
+  // second away flags it.
   document.addEventListener('visibilitychange', onVisibility);
-  window.addEventListener('blur', onBlur);
   window.addEventListener('pagehide', onPageHide);
   state.stop = () => {
     document.removeEventListener('visibilitychange', onVisibility);
-    window.removeEventListener('blur', onBlur);
     window.removeEventListener('pagehide', onPageHide);
   };
   return state;
