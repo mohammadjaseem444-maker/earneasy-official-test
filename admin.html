@@ -526,6 +526,10 @@ table { min-width:600px; }
       <div class="sidebar-item" onclick="showPage('wipedAccounts')" id="nav-wipedAccounts">
         <i class="fas fa-trash-alt"></i> Wiped Accounts
       </div>
+      <div class="sidebar-item" onclick="showPage('adActivity')" id="nav-adActivity">
+        <i class="fas fa-shield-halved"></i> Ad Activity Log
+        <span id="adFlag-badge" style="background:#ef4444;color:#fff;border-radius:50%;width:18px;height:18px;font-size:0.65rem;display:inline-flex;align-items:center;justify-content:center;margin-left:auto;display:none;">0</span>
+      </div>
     </div>
     <div class="sidebar-footer">
       <div class="admin-info">
@@ -1331,6 +1335,53 @@ table { min-width:600px; }
       <div id="wipedAccountsList"><div style="text-align:center;padding:30px;color:var(--text3)"><i class="fas fa-spinner fa-spin"></i> Loading...</div></div>
     </div>
 
+    <!-- AD ACTIVITY LOG PAGE -->
+    <div class="page" id="page-adActivity">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Ad Activity <span>Log</span></div>
+          <div class="page-sub">Every ad attempt — credited vs fraud-flagged, per user</div>
+        </div>
+        <button class="btn-outline" onclick="loadAdActivity()" style="padding:8px 14px;font-size:0.82rem;"><i class="fas fa-rotate"></i> Refresh</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:14px;" id="adActivityStats">
+        <div class="settings-card" style="text-align:center;padding:12px;">
+          <div style="font-size:1.3rem;font-weight:900;color:var(--green);" id="aaStatCredited">-</div>
+          <div style="font-size:0.68rem;color:var(--text3);">Credited</div>
+        </div>
+        <div class="settings-card" style="text-align:center;padding:12px;">
+          <div style="font-size:1.3rem;font-weight:900;color:var(--danger);" id="aaStatFlagged">-</div>
+          <div style="font-size:0.68rem;color:var(--text3);">Flagged</div>
+        </div>
+        <div class="settings-card" style="text-align:center;padding:12px;">
+          <div style="font-size:1.3rem;font-weight:900;color:var(--warn);" id="aaStatRate">-</div>
+          <div style="font-size:0.68rem;color:var(--text3);">Flag Rate</div>
+        </div>
+        <div class="settings-card" style="text-align:center;padding:12px;">
+          <div style="font-size:1.3rem;font-weight:900;color:var(--blue);" id="aaStatUsers">-</div>
+          <div style="font-size:0.68rem;color:var(--text3);">Users w/ Attempts</div>
+        </div>
+      </div>
+      <div class="table-card">
+        <div class="table-header-bar">
+          <div class="table-title"><i class="fas fa-shield-halved" style="color:var(--green);margin-right:8px"></i>By User — sorted by most flagged</div>
+          <div class="search-bar">
+            <i class="fas fa-search"></i>
+            <input type="text" placeholder="Search by name..." id="adActivitySearchInput" oninput="renderAdActivityTable()"/>
+          </div>
+        </div>
+        <div class="table-wrap" id="adActivityTableWrap">
+          <table>
+            <thead><tr>
+              <th>USER</th><th>TOTAL</th><th>CREDITED</th><th>FLAGGED</th><th>FLAG %</th><th>TOP REASON</th><th>LAST ATTEMPT</th><th></th>
+            </tr></thead>
+            <tbody id="adActivityTbody"><tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+
   </div><!-- end main-content -->
 </div><!-- end adminApp -->
 
@@ -1982,6 +2033,7 @@ function showPage(name) {
   }
   if(name==='feedbacks') loadAdminFeedbacks();
   if(name==='wipedAccounts') loadWipedAccounts();
+  if(name==='adActivity') loadAdActivity();
   if(name==='settings') loadStreakSettings();
 }
 
@@ -2727,6 +2779,134 @@ function showWipedUserDetail(idx) {
     const okBtn = modal.querySelector('.btn-do-confirm') || modal.querySelector('.btn-confirm');
     const cancelBtn = modal.querySelector('.btn-cancel-confirm');
     if(titleEl) titleEl.textContent = '🗑️ ' + (w.name||'Unknown') + ' (Wiped)';
+    if(msgEl) { msgEl.innerHTML = detailHtml; msgEl.style.textAlign='left'; }
+    if(okBtn) { okBtn.style.display='none'; }
+    if(cancelBtn) { cancelBtn.textContent='Close'; cancelBtn.onclick=()=>closeModal('confirmModal'); }
+  }
+}
+
+// ============================================================
+// AD ACTIVITY LOG — reads adAttempts/{uid}/{pushId} written by the
+// client's fraud-watch system (index.html). Groups by user so repeat
+// offenders are easy to spot, sorted by flagged-count descending.
+// ============================================================
+let _adActivityByUser = [];
+
+async function loadAdActivity() {
+  const tbody = document.getElementById('adActivityTbody');
+  if(tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text3)"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>';
+  try {
+    const [attemptsSnap, usersSnap] = await Promise.all([fbGet('adAttempts', 15000), fbGet('users', 15000)]);
+    const usersMap = (usersSnap && usersSnap.exists()) ? usersSnap.val() : {};
+
+    if(!attemptsSnap || !attemptsSnap.exists()) {
+      _adActivityByUser = [];
+      renderAdActivityTable();
+      updateAdActivityStats();
+      if(tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text3)">No ad attempts logged yet</td></tr>';
+      return;
+    }
+
+    const raw = attemptsSnap.val();
+    _adActivityByUser = Object.entries(raw).map(([uid, attemptsObj]) => {
+      const attempts = Object.values(attemptsObj || {}).sort((a,b) => (b.ts||0)-(a.ts||0));
+      const credited = attempts.filter(a => a.outcome === 'credited').length;
+      const flagged = attempts.filter(a => a.outcome === 'flagged').length;
+      const reasonCounts = {};
+      attempts.forEach(a => { if(a.outcome === 'flagged' && a.reason) reasonCounts[a.reason] = (reasonCounts[a.reason]||0)+1; });
+      const topReason = Object.entries(reasonCounts).sort((a,b) => b[1]-a[1])[0];
+      const u = usersMap[uid] || {};
+      return {
+        uid, attempts, credited, flagged, total: attempts.length,
+        flagRate: attempts.length ? Math.round((flagged/attempts.length)*100) : 0,
+        topReason: topReason ? topReason[0] : '—',
+        lastTs: attempts.length ? attempts[0].ts : 0,
+        name: u.name || uid.substring(0,14)
+      };
+    }).sort((a,b) => b.flagged - a.flagged || b.lastTs - a.lastTs);
+
+    renderAdActivityTable();
+    updateAdActivityStats();
+  } catch(e) {
+    console.error('loadAdActivity error:', e);
+    if(tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--danger)">Error: ' + e.message + '</td></tr>';
+  }
+}
+
+function updateAdActivityStats() {
+  const totalCredited = _adActivityByUser.reduce((s,u) => s+u.credited, 0);
+  const totalFlagged = _adActivityByUser.reduce((s,u) => s+u.flagged, 0);
+  const total = totalCredited + totalFlagged;
+  const set = (id,val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+  set('aaStatCredited', totalCredited.toLocaleString());
+  set('aaStatFlagged', totalFlagged.toLocaleString());
+  set('aaStatRate', total ? Math.round((totalFlagged/total)*100)+'%' : '—');
+  set('aaStatUsers', _adActivityByUser.length.toLocaleString());
+}
+
+function renderAdActivityTable() {
+  const q = (document.getElementById('adActivitySearchInput')||{}).value?.toLowerCase()||'';
+  const filtered = q ? _adActivityByUser.filter(u => u.name.toLowerCase().includes(q)) : _adActivityByUser;
+  const tbody = document.getElementById('adActivityTbody');
+  if(!tbody) return;
+  if(!filtered.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text3)">No matching users</td></tr>'; return; }
+  const fmt = ts => ts ? new Date(ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+  tbody.innerHTML = filtered.map((u,i) => {
+    const idx = _adActivityByUser.indexOf(u);
+    const rateBadge = u.flagRate >= 50 ? 'badge-red' : (u.flagRate >= 20 ? 'badge-yellow' : 'badge-green');
+    return `<tr style="cursor:pointer;" onclick="showAdActivityUserDetail(${idx})">
+      <td><div style="font-weight:700;">${u.name}</div><div style="font-size:0.68rem;color:var(--text3);">${u.uid.substring(0,18)}</div></td>
+      <td>${u.total}</td>
+      <td style="color:var(--green);font-weight:700;">${u.credited}</td>
+      <td style="color:var(--danger);font-weight:700;">${u.flagged}</td>
+      <td><span class="badge ${rateBadge}">${u.flagRate}%</span></td>
+      <td style="font-size:0.75rem;">${u.topReason}</td>
+      <td style="font-size:0.75rem;">${fmt(u.lastTs)}</td>
+      <td><i class="fas fa-chevron-right" style="color:var(--text3);"></i></td>
+    </tr>`;
+  }).join('');
+}
+
+function showAdActivityUserDetail(idx) {
+  const u = _adActivityByUser[idx];
+  if(!u) return;
+  const fmt = ts => ts ? new Date(ts).toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : 'N/A';
+  const rows = u.attempts.map(a => {
+    const isCredited = a.outcome === 'credited';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:6px;">
+      <div>
+        <div style="font-weight:700;font-size:0.82rem;">${a.source||'—'}</div>
+        <div style="font-size:0.68rem;color:var(--text3);">${fmt(a.ts)} • ${a.durationMs!=null ? (a.durationMs/1000).toFixed(1)+'s' : '—'}</div>
+      </div>
+      <span class="badge ${isCredited?'badge-green':'badge-red'}">${isCredited ? 'CREDITED' : ('FLAGGED: '+(a.reason||'—'))}</span>
+    </div>`;
+  }).join('');
+  const detailHtml = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;">
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center;">
+        <div style="font-size:1.2rem;font-weight:900;color:var(--green);">${u.credited}</div>
+        <div style="font-size:0.65rem;color:var(--text3);">Credited</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center;">
+        <div style="font-size:1.2rem;font-weight:900;color:var(--danger);">${u.flagged}</div>
+        <div style="font-size:0.65rem;color:var(--text3);">Flagged</div>
+      </div>
+      <div style="background:var(--bg3);border-radius:10px;padding:12px;text-align:center;">
+        <div style="font-size:1.2rem;font-weight:900;color:var(--warn);">${u.flagRate}%</div>
+        <div style="font-size:0.65rem;color:var(--text3);">Flag Rate</div>
+      </div>
+    </div>
+    <div style="font-size:0.7rem;color:var(--text3);font-weight:700;margin-bottom:8px;">RECENT ATTEMPTS (${u.attempts.length})</div>
+    <div style="max-height:340px;overflow-y:auto;">${rows}</div>`;
+
+  const modal = document.getElementById('confirmModal');
+  if(modal) {
+    modal.style.display = 'flex';
+    const titleEl = modal.querySelector('.confirm-title');
+    const msgEl = modal.querySelector('.confirm-msg');
+    const okBtn = modal.querySelector('.btn-do-confirm') || modal.querySelector('.btn-confirm');
+    const cancelBtn = modal.querySelector('.btn-cancel-confirm');
+    if(titleEl) titleEl.textContent = '🛡️ ' + u.name + ' — Ad Activity';
     if(msgEl) { msgEl.innerHTML = detailHtml; msgEl.style.textAlign='left'; }
     if(okBtn) { okBtn.style.display='none'; }
     if(cancelBtn) { cancelBtn.textContent='Close'; cancelBtn.onclick=()=>closeModal('confirmModal'); }
