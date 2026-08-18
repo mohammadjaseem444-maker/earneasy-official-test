@@ -2217,9 +2217,9 @@ function scheduleMidnightReset() {
 }
 
 async function resetDailyLimits(today) {
-  const mathMax = userData.mathLimitMax || (window._appSettings?.mathLimit) || 20;
-  const captchaMax = userData.captchaLimitMax || (window._appSettings?.captchaLimit) || 20;
-  const colorMax = userData.colorLimitMax || (window._appSettings?.colorLimit) || 20;
+  const mathMax = (window._appSettings && window._appSettings.mathLimit) || 20;
+  const captchaMax = (window._appSettings && window._appSettings.captchaLimit) || 20;
+  const colorMax = (window._appSettings && window._appSettings.colorLimit) || 20;
   userData.lastReset = today;
   userData.adsWatched = 0;
   userData.adsDate = today;
@@ -2308,7 +2308,7 @@ async function loadUserData(uid) {
       if(userData.colorLeft === undefined || userData.colorLeft === null) userData.colorLeft = colorMax;
       if(userData.adsWatched === undefined || userData.adsWatched === null) userData.adsWatched = 0;
       // Check daily reset
-      checkDailyReset();
+      await checkDailyReset();
       return true;
     }
     return false;
@@ -2501,7 +2501,7 @@ async function handleGoogleResult(user) {
       }
       userData.email = user.email || userData.email || '';
       if(user.photoURL && !userData.photoURL) userData.photoURL = user.photoURL;
-      checkDailyReset();
+      await checkDailyReset();
       saveLocal();
       document.getElementById('loginScreen').classList.remove('active');
       if(loadMsg) loadMsg.style.display = 'none';
@@ -3409,10 +3409,8 @@ function applyAdminSettings(s) {
   // ============ COIN RATE ============
   if(s.coinRate) window.COIN_RATE_DYNAMIC = 10 / s.coinRate;
 
-  // ============ GAME LIMITS MAXES ============
-  if(s.mathLimit) userData.mathLimitMax = s.mathLimit;
-  if(s.captchaLimit) userData.captchaLimitMax = s.captchaLimit;
-  if(s.colorLimit) userData.colorLimitMax = s.colorLimit;
+  // (mathLimitMax/captchaLimitMax/colorLimitMax removed — resetDailyLimits()
+  // now reads window._appSettings directly, always live, never stale)
   // CORRECT coin rate: s.coinRate = coins per ₹10 (e.g. 1000 = 1000 coins per ₹10)
   if (s.coinRate) {
     window.COIN_RATE = 10 / s.coinRate; // rupees per coin (e.g. 0.01)
@@ -6238,7 +6236,16 @@ window.addEventListener('load', async () => {
         saveLocal(); enterApp();
       } else {
         const hasLocal = loadLocal();
-        if(hasLocal && userData.name){ enterApp(); loadUserData(user.uid); }
+        if(hasLocal && userData.name){
+          enterApp();
+          // Background refresh — don't just trust whatever comes back
+          // blindly (it could race ahead of/behind a reset write). Once
+          // it lands, re-verify today's reset against it and refresh the
+          // screen so the final state is always correct either way.
+          loadUserData(user.uid).then(async (ok) => {
+            if(ok) { await checkDailyReset(); updateUI(); }
+          }).catch(()=>{});
+        }
         else {
           // Check if email is banned before allowing new account creation
           if(user.email && firebaseReady) {
