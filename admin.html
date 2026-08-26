@@ -1061,12 +1061,26 @@ table { min-width:600px; }
           <div class="settings-card-title"><i class="fas fa-users"></i> Referral Settings</div>
           <div class="form-grid">
             <div class="form-group">
-              <label class="form-label">COINS FOR REFERRER</label>
-              <input class="form-input" type="number" id="set-referrerCoins" value="200" min="0"/>
+              <label class="form-label">COINS FOR NEW FRIEND (instant, on signup)</label>
+              <input class="form-input" type="number" id="set-referrerCoins" value="300" min="0"/>
             </div>
             <div class="form-group">
-              <label class="form-label">COINS FOR FRIEND</label>
-              <input class="form-input" type="number" id="set-friendCoins" value="200" min="0"/>
+              <label class="form-label">COINS FOR REFERRER (on qualifying trigger below)</label>
+              <input class="form-input" type="number" id="set-referralUnlockCoins" value="500" min="0"/>
+            </div>
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">REFERRER REWARD TRIGGER</label>
+              <select class="form-select" id="set-referralRule" onchange="document.getElementById('referralCountGroup').style.display = this.value==='ads_games' ? '' : 'none'">
+                <option value="immediate">Instant (coins the moment friend signs up)</option>
+                <option value="firstwithdraw">On friend's first withdrawal</option>
+                <option value="ads_games">After friend watches N ads/games (set below)</option>
+              </select>
+            </div>
+            <div class="form-group" id="referralCountGroup">
+              <label class="form-label">ADS/GAMES REQUIRED (lifetime count)</label>
+              <input class="form-input" type="number" id="set-referralTriggerCount" value="30" min="1"/>
             </div>
           </div>
           <div class="form-group">
@@ -1171,13 +1185,7 @@ table { min-width:600px; }
             <label class="form-label">WELCOME NOTIFICATION MESSAGE</label>
             <input class="form-input" type="text" id="set-welcomeMsg" placeholder="Welcome to EarnEasy! Start earning coins now!"/>
           </div>
-          <div class="form-group">
-            <label class="form-label">REFERRAL RULE</label>
-            <select class="form-select" id="set-referralRule">
-              <option value="immediate">Immediate (coins on signup)</option>
-              <option value="firstwithdraw">On First Withdrawal</option>
-            </select>
-          </div>
+          <!-- Referral trigger rule moved to the Referral Settings section, next to the coin amounts it controls -->
         </div>
       </div>
 
@@ -2153,7 +2161,12 @@ async function loadDashboard() {
   const arr = Object.entries(users).map(([uid,u]) => ({uid,...u}));
   allUsers = arr;
 
-  const today = new Date().toISOString().split('T')[0];
+  // IST-based "today" — matches getToday() in index.html exactly. Using
+  // raw UTC here (the old code) caused a mismatch during the ~5.5hr
+  // window each night (12:00-5:30 AM IST) where the UTC date and IST
+  // date differ, miscategorizing which day a user's activity fell under.
+  const istNow = new Date(Date.now() + 5.5 * 60 * 60000);
+  const today = istNow.toISOString().split('T')[0];
   let totalCoins = 0, totalWithdrawn = 0, pendingCount = 0, bannedCount = 0, totalRefers = 0, todayUsers = 0;
 
   let totalAdsToday = 0, totalGamesToday = 0;
@@ -3615,7 +3628,13 @@ async function loadSettings() {
   setVal('set-colorLimit',s.colorLimit);
   setVal('set-colorCoins',s.colorCoins);
   setVal('set-colorEnabled',s.colorEnabled);
-  if(document.getElementById('set-referralRule')) setVal('set-referralRule',s.referralRule||'immediate');
+  if(document.getElementById('set-referralRule')) {
+    setVal('set-referralRule',s.referralRule||'ads_games');
+    const cg = document.getElementById('referralCountGroup');
+    if(cg) cg.style.display = (s.referralRule||'ads_games')==='ads_games' ? '' : 'none';
+  }
+  setVal('set-referralTriggerCount',s.referralTriggerCount||30);
+  setVal('set-referralUnlockCoins',s.referralUnlockCoins||500);
   // Load milestones
   if(s.milestones && Array.isArray(s.milestones)) {
     _milestones = s.milestones;
@@ -3625,7 +3644,6 @@ async function loadSettings() {
     document.getElementById('set-milestonesEnabled').checked = s.milestonesEnabled !== false;
   }
   setVal('set-referrerCoins',s.referrerCoins);
-  setVal('set-friendCoins',s.friendCoins);
   setVal('set-referRules',s.referRules);
   setVal('set-referEnabled',s.referEnabled);
   setVal('set-bothGetCoins',s.bothGetCoins);
@@ -3933,11 +3951,12 @@ async function saveAllSettings() {
     colorLimit:parseInt(getVal('set-colorLimit'))||20,
     colorCoins:parseInt(getVal('set-colorCoins'))||5,
     colorEnabled:getVal('set-colorEnabled'),
-    referralRule:getVal('set-referralRule')||'immediate',
+    referralRule:getVal('set-referralRule')||'ads_games',
+    referralTriggerCount:parseInt(getVal('set-referralTriggerCount'))||30,
+    referralUnlockCoins:parseInt(getVal('set-referralUnlockCoins'))||500,
     milestonesEnabled: document.getElementById('set-milestonesEnabled')?.checked !== false,
     milestones: _milestones,
-    referrerCoins:parseInt(getVal('set-referrerCoins'))||200,
-    friendCoins:parseInt(getVal('set-friendCoins'))||200,
+    referrerCoins:parseInt(getVal('set-referrerCoins'))||300,
     referRules:getVal('set-referRules')||'',
     referEnabled:getVal('set-referEnabled'),
     bothGetCoins:getVal('set-bothGetCoins'),

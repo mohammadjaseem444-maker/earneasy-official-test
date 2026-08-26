@@ -2338,6 +2338,61 @@ async function generateAndRegisterCode(uid, name) {
   return generateCode(name); // Fallback
 }
 
+// ============================================================
+// REFERRAL REWARD — admin-configurable trigger mode
+// (window._appSettings.referralRule):
+//   'instant'          -> referrer rewarded the moment the friend signs up
+//   'first_withdrawal' -> referrer rewarded when the friend submits their
+//                         first withdrawal request
+//   'ads_games'        -> referrer rewarded once the friend's combined
+//                         Daily-Ad + 3-games count reaches
+//                         window._appSettings.referralTriggerCount
+//                         (default 30) — lifetime count, separate from
+//                         any daily-resetting counters
+// All three modes funnel through grantReferralReward(), which is
+// guarded by a Firebase transaction on referralRewardGranted — only
+// the transaction that flips it from empty/false to true is allowed to
+// actually write the reward, so it can NEVER double-grant no matter
+// which mode is active or how many times a trigger point fires.
+// appSettings has a live .on('value') listener already, so a mode/count
+// change in the admin panel takes effect instantly, no redeploy needed.
+// ============================================================
+async function grantReferralReward() {
+  if (!firebaseReady || !currentUser) return;
+  if (!userData.referrerUid || userData.referralRewardGranted) return;
+  try {
+    const guardResult = await db.ref('users/' + currentUser + '/referralRewardGranted').transaction(existing => {
+      if (existing === true) return; // abort — already granted
+      return true;
+    });
+    if (!guardResult.committed) return;
+
+    userData.referralRewardGranted = true;
+    const unlockCoins = (window._appSettings && window._appSettings.referralUnlockCoins) ? window._appSettings.referralUnlockCoins : 500;
+    await db.ref('referralRewards/' + userData.referrerUid + '/' + currentUser).set({
+      coins: unlockCoins, from: currentUser, at: Date.now()
+    }).catch(e => console.warn('Referral reward write error:', e));
+  } catch(e) { console.warn('grantReferralReward error:', e); }
+}
+
+// Called after every Daily Ad / game credit. Only does anything when
+// the admin has 'ads_games' selected as the trigger mode — otherwise
+// this is a harmless no-op (instant/first_withdrawal grant elsewhere).
+async function checkReferralUnlock() {
+  if (!firebaseReady || !currentUser) return;
+  if (!userData.referrerUid || userData.referralRewardGranted) return;
+  const mode = (window._appSettings && window._appSettings.referralRule) || 'ads_games';
+  if (mode !== 'ads_games') return;
+  const requiredCount = (window._appSettings && window._appSettings.referralTriggerCount) || 30;
+  try {
+    const counterResult = await db.ref('users/' + currentUser + '/referralProgressCount').transaction(c => (c||0) + 1);
+    if (!counterResult.committed) return;
+    userData.referralProgressCount = counterResult.snapshot.val();
+    if (userData.referralProgressCount < requiredCount) return;
+    await grantReferralReward();
+  } catch(e) { console.warn('checkReferralUnlock error:', e); }
+}
+
 function generateCode(name) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let code = name.substring(0,2).toUpperCase();
@@ -2916,7 +2971,10 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
     type: 'welcome'
   }];
 
-  // Handle referral — write to queue (direct transaction blocked by Firebase rules)
+  // Handle referral — new user's own bonus stays instant. Referrer's
+  // reward trigger depends on admin-configured mode (see
+  // grantReferralReward/checkReferralUnlock above) — 'instant' grants
+  // right here, other modes grant later from their own hook points.
   if(refCode && firebaseReady) {
     try {
       const refSnap = await db.ref('referLookup/' + refCode).get();
@@ -2924,19 +2982,19 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
         const referrerId = refSnap.val().uid;
         const refCoins = (window._appSettings && window._appSettings.referrerCoins) ? window._appSettings.referrerCoins : 300;
         if(referrerId && referrerId !== uid) {
-          // New user gets coins immediately (their own data)
+          // New user gets coins immediately (their own data) — unchanged
           userData.coins += refCoins;
           userData.todayEarned += refCoins;
           userData.referCodeUsed = refCode;
           userData.referCodeUsedAt = Date.now();
+          userData.referrerUid = referrerId;
+          userData.referralRewardGranted = false;
           userData.notifications.unshift({title:'🎁 Referral Bonus!', msg:`You got ${refCoins} coins for joining with a referral code!`, time:'Just now', read:false});
           showToast(`🎉 Referral bonus! +${refCoins} coins!`);
-          // Referrer gets coins via queue (processed when referrer opens app)
-          await db.ref('referralRewards/' + referrerId + '/' + uid).set({
-            coins: refCoins,
-            from: uid,
-            at: Date.now()
-          }).catch(e => console.warn('Referral queue write error:', e));
+          const triggerMode = (window._appSettings && window._appSettings.referralRule) || 'ads_games';
+          if(triggerMode === 'immediate') {
+            grantReferralReward(); // fire-and-forget — currentUser is already set to uid at this point
+          }
         }
       }
     } catch(e) { console.warn('Referral error:', e); }
@@ -3201,10 +3259,11 @@ async function enterApp() {
   // Show referral rule info
   const refRuleEl = document.getElementById('referRuleInfo');
   if(refRuleEl && window._appSettings) {
-    const rule = window._appSettings.referralRule || 'immediate';
-    const ruleText = rule === 'on_withdrawal' ? '🎁 Coins credited when your friend makes first withdrawal' : 
-                     rule === 'on_game' ? '🎁 Coins credited when your friend plays first game' :
-                     '🎁 Coins credited immediately when friend signs up';
+    const rule = window._appSettings.referralRule || 'ads_games';
+    const reqCount = window._appSettings.referralTriggerCount || 30;
+    const ruleText = rule === 'firstwithdraw' ? '🎁 Coins credited when your friend makes their first withdrawal' :
+                     rule === 'immediate' ? '🎁 Coins credited immediately when your friend signs up' :
+                     `🎁 Coins credited once your friend watches ${reqCount} ads/games`;
     refRuleEl.textContent = ruleText;
   }
   // Update notif badge
@@ -3381,19 +3440,24 @@ function applyAdminSettings(s) {
   if(colorLimitBadge) colorLimitBadge.textContent = userData.colorLeft !== undefined ? userData.colorLeft : (s.colorLimit||20);
 
   // ============ REFERRAL ============
-  const rc = s.referrerCoins || 300;
-  const fc = s.friendCoins || 300;
+  // friendBonus = what the NEW friend gets instantly on signup (setting
+  // named 'referrerCoins' for legacy reasons — kept as-is to avoid
+  // disturbing any value admin already configured under that name).
+  // referrerReward = what the REFERRER gets once the trigger condition
+  // (see referralRule below) is met.
+  const friendBonus = s.referrerCoins || 300;
+  const referrerReward = s.referralUnlockCoins || 500;
   const refText = document.getElementById('referCoinsText');
-  if(refText) refText.textContent = `BOTH get ${rc} Coins!`;
+  if(refText) refText.textContent = `Get ${referrerReward} Coins!`;
   const step3Title = document.getElementById('referStep3Title');
-  if(step3Title) step3Title.textContent = `Both Get ${rc} Coins!`;
+  if(step3Title) step3Title.textContent = `Earn ${referrerReward} Coins!`;
   // Update spans in desc
   const refCoins1 = document.getElementById('refCoins1');
   const refCoins2 = document.getElementById('refCoins2');
-  if(refCoins1) refCoins1.textContent = rc;
-  if(refCoins2) refCoins2.textContent = fc;
+  if(refCoins1) refCoins1.textContent = referrerReward;
+  if(refCoins2) refCoins2.textContent = friendBonus;
   const step3Desc = document.getElementById('referStep3Desc');
-  if(step3Desc && !refCoins1) step3Desc.textContent = `You earn ${rc} coins + they get ${fc} coins instantly`;
+  if(step3Desc && !refCoins1) step3Desc.textContent = `Your friend gets ${friendBonus} coins instantly + you earn ${referrerReward} coins once they qualify`;
 
   // ============ MAINTENANCE ============
   const mainScreen = document.getElementById('maintenanceScreen');
@@ -3865,6 +3929,7 @@ function gameClaimDecision(claim) {
     addCoins(coins, source, ymid);
     _trackAction('game');
     deductGameLimit(limitKey, limitMax);
+    checkReferralUnlock(); // fire-and-forget — referrer reward progress, if 'ads_games' mode is active
     const gcOverlay = document.getElementById('cooldownOverlay');
     const gcCount = document.getElementById('cooldownCount');
     let gcRemaining = 3;
@@ -4043,6 +4108,7 @@ function watchAd() {
         addCoins(coinsPerAd, 'Daily Ad', ymid);
         logAdAttempt('Daily Ad', 'credited', elapsedMs, null);
         _trackAction('ad');
+        checkReferralUnlock(); // fire-and-forget — referrer reward, if this user was referred and just hit 30 ads
       }
       if(btn) { btn.innerHTML = '<i class="fas fa-play"></i> WATCH AD'; btn.disabled = false; }
       updateUI();
@@ -5409,6 +5475,8 @@ async function submitWithdraw() {
   };
 
   try {
+    // Capture BEFORE unshift — needed for the 'first_withdrawal' referral trigger mode
+    const isFirstWithdrawal = !userData.withdrawHistory || userData.withdrawHistory.length === 0;
     // Deduct coins directly (no transaction — transaction causes false errors)
     const newCoins = Math.max(0, (userData.coins||0) - Math.round(requiredCoins));
     userData.coins = newCoins;
@@ -5432,6 +5500,12 @@ async function submitWithdraw() {
     // Strip undefined — Firebase update() rejects the entire call if any value is undefined
     const safeUpdates = JSON.parse(JSON.stringify(updates));
     await db.ref().update(safeUpdates);
+
+    // Referral trigger — only acts if admin has 'first_withdrawal' selected as the mode
+    if(isFirstWithdrawal) {
+      const triggerMode = (window._appSettings && window._appSettings.referralRule) || 'ads_games';
+      if(triggerMode === 'firstwithdraw') grantReferralReward(); // fire-and-forget
+    }
 
     // Update 2: Admin notification (non-critical — fire & forget, don't block or fail on error)
     db.ref('adminNotifications/' + requestId).set({type:'withdrawal', message: userData.name + ' ne ₹' + amount + ' withdraw manga!', time: Date.now(), data: {...wEntry, userName: userData.name, uid: currentUser, requestId}}).catch(()=>{});
@@ -6326,9 +6400,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
