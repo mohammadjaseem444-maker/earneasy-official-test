@@ -2361,6 +2361,8 @@ async function grantReferralReward() {
   if (!firebaseReady || !currentUser) return;
   if (!userData.referrerUid || userData.referralRewardGranted) return;
   try {
+    const authReady = await waitForAuth();
+    if (!authReady) { console.warn('grantReferralReward: auth not ready'); return; }
     const guardResult = await db.ref('users/' + currentUser + '/referralRewardGranted').transaction(existing => {
       if (existing === true) return; // abort — already granted
       return true;
@@ -2385,6 +2387,8 @@ async function checkReferralUnlock() {
   if (mode !== 'ads_games') return;
   const requiredCount = (window._appSettings && window._appSettings.referralTriggerCount) || 30;
   try {
+    const authReady = await waitForAuth();
+    if (!authReady) { console.warn('checkReferralUnlock: auth not ready'); return; }
     const counterResult = await db.ref('users/' + currentUser + '/referralProgressCount').transaction(c => (c||0) + 1);
     if (!counterResult.committed) return;
     userData.referralProgressCount = counterResult.snapshot.val();
@@ -2751,6 +2755,8 @@ async function getDeviceSignature() {
 async function getOrAssignDeviceCode(signature) {
   if (!firebaseReady) return null;
   try {
+    const authReady = await waitForAuth();
+    if (!authReady) { console.warn('getOrAssignDeviceCode: auth not ready'); return null; }
     // Check if this signature already has a code
     const snap = await db.ref('deviceSignatures/' + signature).once('value');
     if (snap.exists() && snap.val().code) {
@@ -3063,8 +3069,10 @@ async function enterApp() {
 
   // Process pending referral rewards — only ONCE per session
   if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
-    window._referralRewardsProcessed = true;
     try {
+      const authReady = await waitForAuth();
+      if(!authReady) throw new Error('Auth not ready — will retry next app open');
+      window._referralRewardsProcessed = true; // only mark done once we're actually about to process
       const rewardsSnap = await db.ref('referralRewards/' + currentUser).get();
       if(rewardsSnap && rewardsSnap.exists()) {
         const rewards = rewardsSnap.val();
@@ -4270,15 +4278,37 @@ function startFraudWatch() {
 // Every attempt gets logged — credited or flagged (fraud detected).
 // fraudFlagCount is a running per-user counter so the admin panel can
 // sort/flag repeat offenders without opening every log entry.
-function logAdAttempt(source, outcome, durationMs, reason) {
+// firebaseReady only means the SDK loaded — it says nothing about
+// whether the Auth session has actually been confirmed server-side yet
+// (there's a real gap between the two, especially right after a
+// persisted-login page load). Writes attempted during that gap fail
+// with permission_denied even though the app "looks" ready. This waits
+// for the REAL auth object to exist before proceeding.
+function waitForAuth(maxWaitMs) {
+  maxWaitMs = maxWaitMs || 3000;
+  return new Promise((resolve) => {
+    if (typeof firebase !== 'undefined' && firebase.auth().currentUser) { resolve(true); return; }
+    const start = Date.now();
+    const check = () => {
+      if (typeof firebase !== 'undefined' && firebase.auth().currentUser) { resolve(true); return; }
+      if (Date.now() - start > maxWaitMs) { resolve(false); return; }
+      setTimeout(check, 200);
+    };
+    check();
+  });
+}
+
+async function logAdAttempt(source, outcome, durationMs, reason) {
   if (!firebaseReady || !currentUser) return;
+  const authReady = await waitForAuth();
+  if (!authReady) { console.warn('logAdAttempt: auth not ready, skipping'); return; }
   db.ref('adAttempts/' + currentUser).push({
     source: source || null,
     outcome: outcome,
     durationMs: (typeof durationMs === 'number' ? durationMs : null),
     reason: reason || null,
     ts: Date.now()
-  }).catch(()=>{});
+  }).catch(e => console.warn('logAdAttempt error:', e));
   if (outcome === 'flagged') {
     db.ref('users/' + currentUser + '/fraudFlagCount').transaction(c => (c||0) + 1).catch(()=>{});
   }
@@ -6400,6 +6430,7 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
+
 <!-- index.html mein add karo body ke end mein -->
 <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
 <script>eruda.init();</script>
