@@ -2282,22 +2282,35 @@ async function loadUserData(uid) {
   if (!firebaseReady) return false;
   try {
     // Wait for auth
-    await new Promise(resolve => {
+    const authUser = await new Promise(resolve => {
       const unsub = firebase.auth().onAuthStateChanged(user => {
         unsub();
         resolve(user);
       });
     });
-    const snap = await db.ref('users/' + uid).get();
+    // CRITICAL: keep currentUser in sync with the REAL, live Firebase
+    // Auth session — this used to only get set once (from stale
+    // localStorage via loadLocal(), or from an old sign-in), and never
+    // got corrected here even though this function fetches data using
+    // the correct uid. That mismatch meant userData looked fine (loaded
+    // from the right place) while every NEW write (adAttempts, referral,
+    // device-code) went to the WRONG uid and got permission_denied.
+    if (authUser && authUser.uid !== currentUser) {
+      console.warn('currentUser was out of sync (' + currentUser + ' vs auth ' + authUser.uid + ') — correcting');
+      currentUser = authUser.uid;
+    } else if (!authUser) {
+      console.warn('loadUserData: no authenticated Firebase user found');
+    }
+    const snap = await db.ref('users/' + currentUser).get();
     if (snap.exists()) {
       // Firebase = absolute source of truth, overrides everything
       userData = snap.val();
-      userData.uid = uid;
+      userData.uid = currentUser;
       // Ensure name from Google auth if missing in Firebase
       const _authUser = firebase.auth().currentUser;
       if((!userData.name || userData.name === 'User') && _authUser && _authUser.displayName) {
         userData.name = _authUser.displayName;
-        db.ref('users/'+uid+'/name').set(_authUser.displayName).catch(()=>{});
+        db.ref('users/'+currentUser+'/name').set(_authUser.displayName).catch(()=>{});
       }
       // Initialize any missing fields (for existing users upgrading)
       const mathMax = window._appSettings?.mathLimit || 20;
@@ -6339,7 +6352,9 @@ window.addEventListener('load', async () => {
         if(user.photoURL && !userData.photoURL) userData.photoURL = user.photoURL;
         saveLocal(); enterApp();
       } else {
-        const hasLocal = loadLocal();
+        const cachedUid = localStorage.getItem('earneasy_uid');
+        const hasLocal = (cachedUid === user.uid) ? loadLocal() : false; // only trust the cache if it's genuinely this same account's data
+        currentUser = user.uid; // always the source of truth, regardless of what loadLocal() may have touched
         if(hasLocal && userData.name){
           enterApp();
           // Background refresh — don't just trust whatever comes back
