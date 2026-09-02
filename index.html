@@ -2544,9 +2544,37 @@ async function loginWithGoogle() {
 async function handleGoogleResult(user) {
   const btn = document.getElementById('googleLoginBtn');
   const loadMsg = document.getElementById('loginLoadingMsg');
-  
+
   try {
-    const snap = await db.ref('users/' + user.uid).get().catch(()=>null);
+    // CRITICAL: distinguish "genuinely a new user" from "this read
+    // just failed" (e.g. right after a fresh sign-in/sign-up, the RTDB
+    // connection can take a moment to pick up the new auth token —
+    // a write/read attempted in that gap fails with permission_denied).
+    // Blindly treating ANY failed read as "new user" risked wiping an
+    // EXISTING user back to a fresh 100-coin account if that read
+    // happened to fail from bad timing rather than truly missing data.
+    // So: retry a few times before ever concluding "new user".
+    let snap = null;
+    let readFailed = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        snap = await db.ref('users/' + user.uid).get();
+        readFailed = false;
+        break;
+      } catch (e) {
+        readFailed = true;
+        if (attempt < 3) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+    if (readFailed) {
+      // Every attempt failed — genuinely can't reach Firebase right now.
+      // Do NOT treat this as "new user". Show an error and let them retry.
+      console.warn('handleGoogleResult: could not verify existing account after retries');
+      if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = getSVGGoogleBtn(); }
+      if(loadMsg) loadMsg.style.display = 'none';
+      showModal('📵', 'Connection Issue', 'Could not verify your account. Please check your internet and try again.', 'error');
+      return;
+    }
     if(snap && snap.exists()) {
       // Existing user - check device
       // Check if email is banned
@@ -6445,9 +6473,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
