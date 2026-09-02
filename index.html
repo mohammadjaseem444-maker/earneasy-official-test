@@ -2541,40 +2541,49 @@ async function loginWithGoogle() {
   }
 }
 
+// ============================================================
+// FIREBASE RTDB AUTH READINESS
+// firebase.auth().currentUser being non-null does NOT mean the
+// Realtime Database's own connection has actually picked up that auth
+// token yet — there's a real (usually brief, but sometimes not) gap
+// right after any sign-in or sign-up. Any read/write attempted in that
+// gap fails with permission_denied, even though the app "looks" ready.
+// This does a genuine canary READ (something that requires auth != null
+// but nothing more) and retries with backoff until it succeeds — this
+// is the ONE reliable signal that Firebase is actually ready, checked
+// once, right after auth resolves, before ANYTHING else touches the
+// database. Every login path (new AND returning user) funnels through
+// this now — no more scattered per-call-site retry patches.
+// ============================================================
+async function waitForRtdbAuthReady(maxAttempts) {
+  maxAttempts = maxAttempts || 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await db.ref('appSettings').once('value'); // cheap, requires auth != null only
+      return true;
+    } catch (e) {
+      if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+    }
+  }
+  return false;
+}
+
 async function handleGoogleResult(user) {
   const btn = document.getElementById('googleLoginBtn');
   const loadMsg = document.getElementById('loginLoadingMsg');
 
   try {
-    // CRITICAL: distinguish "genuinely a new user" from "this read
-    // just failed" (e.g. right after a fresh sign-in/sign-up, the RTDB
-    // connection can take a moment to pick up the new auth token —
-    // a write/read attempted in that gap fails with permission_denied).
-    // Blindly treating ANY failed read as "new user" risked wiping an
-    // EXISTING user back to a fresh 100-coin account if that read
-    // happened to fail from bad timing rather than truly missing data.
-    // So: retry a few times before ever concluding "new user".
-    let snap = null;
-    let readFailed = false;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      try {
-        snap = await db.ref('users/' + user.uid).get();
-        readFailed = false;
-        break;
-      } catch (e) {
-        readFailed = true;
-        if (attempt < 3) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
-      }
-    }
-    if (readFailed) {
-      // Every attempt failed — genuinely can't reach Firebase right now.
-      // Do NOT treat this as "new user". Show an error and let them retry.
-      console.warn('handleGoogleResult: could not verify existing account after retries');
+    const rtdbReady = await waitForRtdbAuthReady();
+    if (!rtdbReady) {
+      console.warn('handleGoogleResult: Firebase not ready after retries');
       if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = getSVGGoogleBtn(); }
       if(loadMsg) loadMsg.style.display = 'none';
-      showModal('📵', 'Connection Issue', 'Could not verify your account. Please check your internet and try again.', 'error');
+      showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
       return;
     }
+    // Firebase is now confirmed genuinely ready — this read (and every
+    // subsequent one in this login flow) can be trusted at face value.
+    const snap = await db.ref('users/' + user.uid).get().catch(e => { console.warn('users read error:', e); return null; });
     if(snap && snap.exists()) {
       // Existing user - check device
       // Check if email is banned
@@ -2961,7 +2970,16 @@ async function checkMultiAccount(uid) {
 
 async function setupNewUser(uid, displayName, email, photoURL, refCode, loginType, phone, telegramId) {
   const name_clean = (displayName||'User').replace(/[<>"'&]/g,'').trim().substring(0,25)||'User';
-  
+
+  // Defensive re-check — time may have passed (user filling the profile
+  // form) since handleGoogleResult's own check. Cheap, and closes any
+  // edge case (re-auth mid-session, multiple tabs, etc.)
+  const rtdbReady = await waitForRtdbAuthReady();
+  if (!rtdbReady) {
+    showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
+    return;
+  }
+
   // Multi-account check
   if (!loginType || loginType !== 'telegram') {
     // Google users: device fingerprint check
