@@ -2249,9 +2249,13 @@ async function resetDailyLimits(today) {
 function saveData() {
   saveLocal();
   if (firebaseReady && currentUser) {
-    // Save to Firebase - remove uid from saved data to avoid redundancy
+    // Save to Firebase - remove uid from saved data to avoid redundancy.
+    // Uses update() not set() — if userData is ever incomplete in memory
+    // (e.g. loaded mid-way through a timing-sensitive window), update()
+    // only touches the keys we actually have, instead of silently
+    // wiping out any Firebase field we don't currently hold locally.
     const toSave = {...userData};
-    db.ref('users/' + currentUser).set(toSave)
+    db.ref('users/' + currentUser).update(toSave)
       .catch(e => console.warn('Firebase save error:', e.message));
     // Register referCode in referLookup only once per session (rules: !data.exists())
     // window._eeRefLookupDone flag prevents repeated Firebase reads on every saveData() call
@@ -2268,39 +2272,41 @@ function saveData() {
 }
 
 async function loadUserData(uid) {
-  // Check if this UID was wiped by admin
-  if(firebaseReady) {
-    try {
-      const wipedSnap = await db.ref('wipedUIDs/' + uid).get();
-      if(wipedSnap && wipedSnap.exists()) {
-        await firebase.auth().signOut().catch(()=>{});
-        showModal('🚫', 'Account Removed', 'Your account has been removed by admin. Contact support for more info.', 'error');
-        return false;
-      }
-    } catch(e) { /* non-critical */ }
-  }
   if (!firebaseReady) return false;
+  // Resolve the REAL, live identity FIRST — before any check in this
+  // function uses it. Previously the wipe-check used the raw `uid`
+  // parameter while everything else below used the (possibly
+  // corrected) `currentUser`, which could disagree in exactly the
+  // timing-sensitive windows this whole file has been fighting today.
+  let authUser = null;
   try {
-    // Wait for auth
-    const authUser = await new Promise(resolve => {
+    authUser = await new Promise(resolve => {
       const unsub = firebase.auth().onAuthStateChanged(user => {
         unsub();
         resolve(user);
       });
     });
-    // CRITICAL: keep currentUser in sync with the REAL, live Firebase
-    // Auth session — this used to only get set once (from stale
-    // localStorage via loadLocal(), or from an old sign-in), and never
-    // got corrected here even though this function fetches data using
-    // the correct uid. That mismatch meant userData looked fine (loaded
-    // from the right place) while every NEW write (adAttempts, referral,
-    // device-code) went to the WRONG uid and got permission_denied.
-    if (authUser && authUser.uid !== currentUser) {
-      console.warn('currentUser was out of sync (' + currentUser + ' vs auth ' + authUser.uid + ') — correcting');
-      currentUser = authUser.uid;
-    } else if (!authUser) {
-      console.warn('loadUserData: no authenticated Firebase user found');
+  } catch(e) { console.warn('loadUserData: auth wait error:', e); }
+  if (authUser && authUser.uid !== currentUser) {
+    console.warn('currentUser was out of sync (' + currentUser + ' vs auth ' + authUser.uid + ') — correcting');
+    currentUser = authUser.uid;
+  } else if (!authUser) {
+    console.warn('loadUserData: no authenticated Firebase user found');
+    currentUser = uid; // best effort — no live auth object to correct against
+  }
+
+  // Check if this UID was wiped by admin — now consistently checked
+  // against the same corrected identity used for everything else below.
+  try {
+    const wipedSnap = await db.ref('wipedUIDs/' + currentUser).get();
+    if(wipedSnap && wipedSnap.exists()) {
+      await firebase.auth().signOut().catch(()=>{});
+      showModal('🚫', 'Account Removed', 'Your account has been removed by admin. Contact support for more info.', 'error');
+      return false;
     }
+  } catch(e) { /* non-critical */ }
+
+  try {
     const snap = await db.ref('users/' + currentUser).get();
     if (snap.exists()) {
       // Firebase = absolute source of truth, overrides everything
@@ -3141,25 +3147,32 @@ async function enterApp() {
           if(entry && entry.coins > 0) { totalCoins += entry.coins; totalReferrals++; }
         }
         if(totalCoins > 0) {
-          // Remove queue FIRST (prevents double processing if app reopens)
-          await db.ref('referralRewards/' + currentUser).remove();
-          // THEN add coins
-          userData.coins = (userData.coins || 0) + totalCoins;
-          userData.referCount = (userData.referCount || 0) + totalReferrals;
-          userData.referEarnings = (userData.referEarnings || 0) + totalCoins;
-          userData.lastReferAt = Date.now();
+          const newCoins = (userData.coins || 0) + totalCoins;
+          const newReferCount = (userData.referCount || 0) + totalReferrals;
+          const newReferEarnings = (userData.referEarnings || 0) + totalCoins;
+          const newLastReferAt = Date.now();
+          // Single atomic multi-path update — clears the queue AND
+          // credits the coins together. Previously these were two
+          // separate steps (queue removed, THEN coins saved) — a
+          // connection drop in between meant the reward was gone
+          // forever with nothing left to retry against.
+          await db.ref().update({
+            ['referralRewards/' + currentUser]: null,
+            ['users/' + currentUser + '/coins']: newCoins,
+            ['users/' + currentUser + '/referCount']: newReferCount,
+            ['users/' + currentUser + '/referEarnings']: newReferEarnings,
+            ['users/' + currentUser + '/lastReferAt']: newLastReferAt
+          });
+          userData.coins = newCoins;
+          userData.referCount = newReferCount;
+          userData.referEarnings = newReferEarnings;
+          userData.lastReferAt = newLastReferAt;
           if(!userData.notifications) userData.notifications = [];
           userData.notifications.unshift({
             title: '🎁 Referral Reward!',
             msg: `${totalReferrals} friend${totalReferrals > 1 ? 's' : ''} joined using your code! +${totalCoins} coins added!`,
             time: new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}),
             read: false
-          });
-          await db.ref('users/' + currentUser).update({
-            coins: userData.coins,
-            referCount: userData.referCount,
-            referEarnings: userData.referEarnings,
-            lastReferAt: userData.lastReferAt
           });
           saveLocal();
           showToast(`🎉 +${totalCoins} referral coins added!`);
@@ -3708,8 +3721,8 @@ async function checkAndClaimMilestones(referCount, milestones) {
       userData.claimedMilestones = claimed;
       
       window._trustedCoinUpdate = true;
-      await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + m.coins);
-      userData.coins = (userData.coins||0) + m.coins;
+      const milestoneResult = await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + m.coins);
+      userData.coins = milestoneResult.committed ? milestoneResult.snapshot.val() : ((userData.coins||0) + m.coins);
       window._trustedCoinUpdate = false;
       
       await db.ref('users/' + currentUser + '/claimedMilestones').set(claimed);
@@ -4227,14 +4240,22 @@ function startCooldown(seconds) {
   }
 }
 
-function addCoins(amount, source, ymid) {
+async function addCoins(amount, source, ymid) {
   if (!firebaseReady || !currentUser) {
-    userData.coins = (userData.coins||0) + amount;
-    userData.todayEarned = (userData.todayEarned||0) + amount;
-    saveLocal();
-    updateUI();
-    showToast('+' + amount + ' Coins Earned! 💰');
-    return;
+    // Never silently credit coins ONLY to local storage and claim
+    // success — the next fresh Firebase load overwrites local state
+    // entirely, and that "earned" amount would just vanish with no
+    // trace, while the user believes they were paid. Try to recover
+    // readiness first; if we genuinely can't reach Firebase, be honest
+    // about it instead of lying with a success toast.
+    const ready = firebaseReady ? true : false;
+    if (!ready || !currentUser) {
+      const recovered = (typeof waitForRtdbAuthReady === 'function') ? await waitForRtdbAuthReady(3) : false;
+      if (!recovered || !currentUser) {
+        showModal('📵', 'Connection Issue', 'Could not save your coins — please check your internet and try again.', 'error');
+        return;
+      }
+    }
   }
   db.ref('users/' + currentUser + '/coins').transaction(currentCoins => {
     return (currentCoins || 0) + amount;
@@ -5563,20 +5584,40 @@ async function submitWithdraw() {
     uid: currentUser
   };
 
+  // Declared here (not inside try) so the catch block's rollback can
+  // also reference the exact same amount
+  const coinsToDeduct = Math.round(requiredCoins);
+
   try {
     // Capture BEFORE unshift — needed for the 'first_withdrawal' referral trigger mode
     const isFirstWithdrawal = !userData.withdrawHistory || userData.withdrawHistory.length === 0;
-    // Deduct coins directly (no transaction — transaction causes false errors)
-    const newCoins = Math.max(0, (userData.coins||0) - Math.round(requiredCoins));
+
+    // Atomically check-and-deduct coins FIRST, against the REAL server
+    // value (not the local cache) — this is the one step that must be
+    // race-safe. Two rapid submits (double-tap, two tabs) can no longer
+    // both succeed from the same stale balance and silently drop one
+    // deduction; Firebase's transaction guarantees only one can win if
+    // the balance can't cover both.
+    const deductResult = await db.ref('users/' + currentUser + '/coins').transaction(current => {
+      const cur = (current || 0);
+      if (cur < coinsToDeduct) return; // abort — genuinely not enough, checked atomically
+      return cur - coinsToDeduct;
+    });
+    if (!deductResult.committed) {
+      _withdrawProcessing = false; btn.textContent = origText; btn.disabled = false;
+      showModal('❌', 'Not Enough Coins! 💰', `You need ${coinsToDeduct.toLocaleString()} coins to withdraw ₹${amount}, but you only have ${(userData.coins||0).toLocaleString()} coins. Keep earning!`, 'error');
+      return;
+    }
+    const newCoins = deductResult.snapshot.val();
     userData.coins = newCoins;
     userData.totalWithdrawn = (userData.totalWithdrawn||0) + amount;
     userData.withdrawHistory = userData.withdrawHistory || [];
     userData.withdrawHistory.unshift(wEntry);
     saveLocal();
 
-    // Update 1: User data + withdrawRequests (critical — must succeed)
+    // Update: totalWithdrawn + history + withdrawRequests (coins already
+    // deducted atomically above, not touched again here)
     const updates = {};
-    updates['users/' + currentUser + '/coins'] = newCoins;
     updates['users/' + currentUser + '/totalWithdrawn'] = userData.totalWithdrawn;
     updates['users/' + currentUser + '/withdrawHistory'] = userData.withdrawHistory;
     updates['withdrawRequests/' + requestId] = {
@@ -5610,8 +5651,13 @@ async function submitWithdraw() {
     showModal('🎉', 'Withdraw Submitted! ✅', '₹' + amount + ' withdraw request submitted successfully! ' + withdrawMsg, 'success');
 
   } catch(e) {
-    // Rollback coins AND remove the unshifted entry if save failed
-    userData.coins = (userData.coins||0) + Math.round(requiredCoins);
+    // The coin deduction above is atomic and already committed by the
+    // time we could reach here from a LATER step failing — refund it
+    // the same safe way (a transaction add-back), never a blind local
+    // "+= amount" that could itself race with something else.
+    db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coinsToDeduct).then(r => {
+      if (r.committed) userData.coins = r.snapshot.val();
+    }).catch(()=>{});
     userData.totalWithdrawn = Math.max(0, (userData.totalWithdrawn||0) - amount);
     // Remove the entry we added optimistically
     if(userData.withdrawHistory && userData.withdrawHistory[0]?.requestId === requestId) {
@@ -6054,8 +6100,8 @@ async function claimStreakDay() {
 
   // Postback confirmed (or it was a free-claim day) — safe to credit
   window._trustedCoinUpdate = true;
-  await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
-  userData.coins = (userData.coins||0) + coins;
+  const streakCoinResult = await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
+  userData.coins = streakCoinResult.committed ? streakCoinResult.snapshot.val() : ((userData.coins||0) + coins);
   window._trustedCoinUpdate = false;
 
   updateUI();
@@ -6392,6 +6438,29 @@ window.addEventListener('load', async () => {
       const s = document.getElementById('splash');
       if(s){ s.style.opacity='0'; s.style.pointerEvents='none'; s.style.display='none'; }
       currentUser = user.uid;
+
+      // This listener fires on EVERY app open with a persisted session —
+      // by far the most common path for returning users. It was never
+      // protected against the same RTDB-auth-not-ready-yet timing issue
+      // fixed elsewhere — a failed loadUserData() here, with no local
+      // cache to fall back on, went straight to "treat as new user".
+      const rtdbReady = await waitForRtdbAuthReady();
+      if (!rtdbReady) {
+        console.warn('onAuthStateChanged: Firebase not ready after retries — retrying from cache/login screen rather than risking a false new-user');
+        const cachedUid2 = localStorage.getItem('earneasy_uid');
+        const hasLocal2 = (cachedUid2 === user.uid) ? loadLocal() : false;
+        currentUser = user.uid;
+        if (hasLocal2 && userData.name) {
+          enterApp(); // show cached data now, correct it once Firebase actually comes back
+          loadUserData(user.uid).then(async (ok) => { if(ok) { await checkDailyReset(); updateUI(); } }).catch(()=>{});
+        } else {
+          document.getElementById('loginScreen').classList.add('active');
+          showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
+        }
+        _authResolved = true;
+        return;
+      }
+
       const loaded = await loadUserData(user.uid);
       if(loaded) {
         if(user.displayName && !userData.name) userData.name = user.displayName;
@@ -6491,7 +6560,6 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
 <!-- index.html mein add karo body ke end mein -->
 <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
 <script>eruda.init();</script>
