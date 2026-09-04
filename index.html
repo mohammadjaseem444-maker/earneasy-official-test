@@ -6526,6 +6526,27 @@ window.addEventListener('load', async () => {
             }
           }
         }, _waitTime);
+      } else if (document.getElementById('app').classList.contains('active')) {
+        // MID-SESSION AUTH LOSS: the app was already running with a
+        // valid session and Firebase Auth just lost it (token
+        // expired/revoked, or a hiccup during the SDK's normal refresh).
+        // This used to be silently ignored — nothing re-authenticated,
+        // and every subsequent Firebase call just failed in the
+        // background with permission_denied and no visible cause.
+        // Now: try to silently re-establish the session the same way
+        // login normally happens, without disrupting what the user is
+        // doing (no full reload, no visible login screen unless this
+        // recovery attempt itself fails).
+        console.warn('Auth session lost mid-use — attempting silent re-auth');
+        if (isTelegramEnv()) {
+          telegramAutoLogin();
+        } else {
+          // Google/browser: can't silently re-trigger signInWithPopup
+          // without a user gesture. Firebase's own LOCAL persistence
+          // should normally restore this on its own; if we're seeing
+          // null here anyway, surface it rather than fail silently.
+          showToast('⚠️ Connection lost — please reopen the app');
+        }
       }
     }
     _authResolved = true;
