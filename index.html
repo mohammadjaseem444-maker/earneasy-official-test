@@ -2561,14 +2561,22 @@ async function loginWithGoogle() {
 // database. Every login path (new AND returning user) funnels through
 // this now — no more scattered per-call-site retry patches.
 // ============================================================
+// Telegram's in-app WebView can take noticeably longer than a normal
+// browser tab to get the Realtime Database connection fully
+// authenticated (mobile network + background/foreground pauses). The
+// old budget (~4s total) was long enough for a browser but not always
+// enough inside Telegram, causing genuine "just needs a bit more time"
+// cases to be wrongly treated as a connection failure. This only ever
+// costs time in the rare slow case — the happy path (readiness
+// confirmed on the first try) is exactly as fast as before.
 async function waitForRtdbAuthReady(maxAttempts) {
-  maxAttempts = maxAttempts || 5;
+  maxAttempts = maxAttempts || 9;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       await db.ref('appSettings').once('value'); // cheap, requires auth != null only
       return true;
     } catch (e) {
-      if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
+      if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
     }
   }
   return false;
