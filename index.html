@@ -1,8 +1,13 @@
 <!DOCTYPE html>
 <!--
-FIREBASE REALTIME DATABASE RULES
-Paste in: Firebase Console → Realtime Database → Rules → Publish
-Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegramId fields)
+FIREBASE REALTIME DATABASE RULES — accurate as of this file's last edit.
+Paste in: Firebase Console -> Realtime Database -> Rules -> Publish
+
+NOTE: this used to be TWO different, both-stale copies embedded in this
+file (this one, plus a second one further down near the Firebase SDK
+script tags) which disagreed with each other and with what was actually
+live. That caused real confusion during debugging. Now there is exactly
+ONE copy, right here, and the second location just points back to it.
 
 {
   "rules": {
@@ -13,6 +18,7 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
         ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
         "coins": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999" },
         "adsWatched": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 500" },
+        "fraudFlagCount": { ".validate": "newData.isNumber() && newData.val() >= 0" },
         "bonusClaimed": { ".validate": "newData.isBoolean() || newData.isString()" },
         "bonusDate": { ".validate": "newData.isString()" },
         "mathLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
@@ -51,10 +57,7 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
     "promoCodes": {
       ".read": "auth != null",
       ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$code": {
-        ".write": "auth != null",
-        "usedCount": { ".write": "auth != null" }
-      }
+      "$code": { ".write": "auth != null", "usedCount": { ".write": "auth != null" } }
     },
     "appSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "offerwallSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
@@ -64,43 +67,90 @@ Last updated: v4 (Telegram login + Device Code system + loginType/phone/telegram
     "adminConfig": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "deviceFingerprints": {
       ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      ".indexOn": ["uid"],
       "$fp": {
         ".read": "auth != null",
-        ".write": "auth != null && (!data.exists() || data.child('uid').val() == auth.uid)"
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() == auth.uid || root.child('adminUIDs').child(auth.uid).exists())"
       }
     },
-    "deviceSignatures": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$sig": { ".write": "auth != null", ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" } },
-    "deviceCodeCounter": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
+    "deviceSignatures": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$sig": {
+        ".write": "auth != null",
+        ".read": "auth != null"
+      }
+    },
+    "deviceCodeCounter": { ".read": "auth != null", ".write": "auth != null" },
     "deviceCodeUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$code": { ".write": "auth != null" } },
+    "telegramUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$tgId": { ".write": "auth != null", ".read": "auth != null" } },
+    "wipedUIDs": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "multiAccountAttempts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
     "errorLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
     "userFeedback": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
     "wipedAccounts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "telegramUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$tgId": { ".write": "auth != null", ".read": "auth != null" } },
-    "wipedUIDs": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "adminLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "wannads_log": { ".read": false, ".write": true },
     "bannedEmails": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$email": { ".read": "auth != null" } },
+    "referralRewards": {
+      "$referrerId": {
+        ".read": "auth != null && auth.uid == $referrerId",
+        ".write": "auth != null && auth.uid == $referrerId",
+        "$entry": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['coins']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 1000"
+        }
+      }
+    },
+    "debugLog": { ".read": true, ".write": true },
     "pendingClaims": {
       ".read": true,
-      ".write": true
+      ".write": true,
+      "$ymid": {
+        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
+      }
+    },
+    "claimConfirmations": {
+      ".read": true,
+      ".write": true,
+      "$ymid": {
+        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
+      }
+    },
+    "adAttempts": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+        ".write": "auth != null && auth.uid == $uid"
+      }
     },
     "pendingCoins": {
       "$uid": {
         ".write": true,
         ".read": "auth != null && auth.uid == $uid",
         "$txId": {
-          ".validate": "newData.hasChildren(['coins']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 1000"
+          ".validate": "newData.hasChildren(['coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
         }
       }
     },
-    "processedTx": {
-      ".write": true,
-      ".read": true
+    "processedTx": { ".write": true, ".read": true },
+    "clawbacks": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
     },
     "$other": { ".read": false, ".write": false }
   }
 }
+
+*** IMPORTANT: deviceCodeCounter's rule above has been changed from
+*** admin-only read to "auth != null" read. Firebase transactions
+*** require client read access on the path being transacted (the SDK
+*** reads the current value locally before proposing the write) — with
+*** an admin-only read, getOrAssignDeviceCode()'s transaction call
+*** could NEVER succeed for a normal user, unconditionally, regardless
+*** of any timing fix. This rules change MUST be published for that fix
+*** to actually work — it cannot be fixed from the JavaScript side alone.
 -->
 <html lang="en">
 <head>
@@ -1754,68 +1804,10 @@ body.slow-net .splash-spinner {
 // ============================================================
 // FIREBASE CONFIG
 // ============================================================
-// PRODUCTION-READY FIREBASE RULES - paste in Firebase Console:
-/*
-{
-  "rules": {
-    "users": {
-      "$uid": {
-        ".read": "auth != null && auth.uid == $uid",
-        ".write": "auth != null && auth.uid == $uid",
-        "coins": {
-          ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999"
-        },
-        "banned": {
-          ".write": false
-        },
-        "referCode": {
-          ".validate": "newData.isString() && newData.val().length >= 4 && newData.val().length <= 8"
-        },
-        "withdrawHistory": {
-          ".validate": "newData.isString() || newData.hasChildren()"
-        }
-      }
-    },
-    "referLookup": {
-      ".read": "auth != null",
-      "$code": {
-        ".write": "auth != null && !data.exists()"
-      }
-    },
-    "withdrawRequests": {
-      ".read": false,
-      "$requestId": {
-        ".write": "auth != null && !data.exists()",
-        ".validate": "newData.hasChildren(['uid','amount','method','timestamp']) && newData.child('uid').val() == auth.uid"
-      }
-    },
-    "tasks": {
-      ".read": "auth != null",
-      ".write": false
-    },
-    "promoCodes": {
-      ".read": "auth != null",
-      ".write": false
-    },
-    "appSettings": {
-      ".read": "auth != null",
-      ".write": false
-    },
-    "wannads_log": {
-      ".read": false,
-      ".write": true
-    },
-    "sentNotifications": {
-      ".read": false,
-      ".write": true
-    },
-    "$other": {
-      ".read": false,
-      ".write": false
-    }
-  }
-}
-*/
+// The authoritative Firebase Rules are documented once, in the single
+// comment block at the very top of this file (right after <!DOCTYPE html>).
+// This is the only copy — a second, disagreeing copy used to live here,
+// which was a real source of confusion during debugging.
 // ============================================================
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyAO1I_Vy4ViEYlGnRqHGDdYYk1XoK5cSZ4",
@@ -1854,20 +1846,15 @@ let userData = {
 };
 
 const COIN_RATE = 0.01; // 1 coin = ₹0.01 (1000 coins = ₹10)
-// #12 Anti-hack: block direct console coin manipulation
-(function(){
-  const _sentinel = {};
-  Object.defineProperty(_sentinel, 'coins', {
-    set: function(v) {
-      if(typeof v === 'number' && v > 99999 && !window._trustedCoinUpdate) {
-        console.warn('[EarnEasy] Suspicious coin value blocked');
-        return;
-      }
-      userData._coins = v;
-    },
-    get: function() { return userData._coins || 0; }
-  });
-})();
+// NOTE: a "#12 Anti-hack: block direct console coin manipulation" IIFE
+// used to live here. It defined a getter/setter on a completely
+// separate, never-referenced `_sentinel` object — `userData.coins`
+// (the actual property assigned everywhere in this file) was never
+// connected to it in any way, so it blocked nothing and gave a false
+// sense of protection. Removed. The REAL protection against invalid
+// coin values is server-side: the `coins` validation rule in Firebase
+// Rules (0 to 9,999,999) and the atomic transactions used everywhere
+// coins are credited or deducted in this file.
 const MIN_WITHDRAW = 50;
 let selectedMethod = 'upi';
 let adWatching = false;
@@ -2109,6 +2096,16 @@ async function initFirebase() {
       // No SESSION fallback — SESSION logs out on every refresh!
     }
     console.log('Firebase connected');
+    // Keep firebaseReady genuinely live from here on — it used to only
+    // ever get set once at boot and never reset, so it told callers
+    // nothing about whether the connection was still healthy. This
+    // doesn't replace the strong per-call waitForRtdbAuthReady() checks
+    // (which verify auth specifically, not just raw connectivity), but
+    // it means a background connection drop is at least reflected
+    // immediately in the flag rather than the flag lying forever.
+    db.ref('.info/connected').on('value', (snap) => {
+      firebaseReady = snap.val() === true;
+    });
   } catch(e) {
     console.warn('Firebase error:', e.message);
     firebaseReady = false;
@@ -2380,7 +2377,7 @@ async function grantReferralReward() {
   if (!firebaseReady || !currentUser) return;
   if (!userData.referrerUid || userData.referralRewardGranted) return;
   try {
-    const authReady = await waitForAuth();
+    const authReady = await waitForRtdbAuthReady();
     if (!authReady) { console.warn('grantReferralReward: auth not ready'); return; }
     const guardResult = await db.ref('users/' + currentUser + '/referralRewardGranted').transaction(existing => {
       if (existing === true) return; // abort — already granted
@@ -2406,7 +2403,7 @@ async function checkReferralUnlock() {
   if (mode !== 'ads_games') return;
   const requiredCount = (window._appSettings && window._appSettings.referralTriggerCount) || 30;
   try {
-    const authReady = await waitForAuth();
+    const authReady = await waitForRtdbAuthReady();
     if (!authReady) { console.warn('checkReferralUnlock: auth not ready'); return; }
     const counterResult = await db.ref('users/' + currentUser + '/referralProgressCount').transaction(c => (c||0) + 1);
     if (!counterResult.committed) return;
@@ -2819,14 +2816,24 @@ async function getDeviceSignature() {
 async function getOrAssignDeviceCode(signature) {
   if (!firebaseReady) return null;
   try {
-    const authReady = await waitForAuth();
+    // Strong check (real RTDB round-trip), not just the weak client-side
+    // auth-object check — this function used the weak one before, which
+    // is exactly the class of gap Finding #1 identified: it can report
+    // "ready" before RTDB has actually picked up the auth token.
+    const authReady = await waitForRtdbAuthReady();
     if (!authReady) { console.warn('getOrAssignDeviceCode: auth not ready'); return null; }
     // Check if this signature already has a code
     const snap = await db.ref('deviceSignatures/' + signature).once('value');
     if (snap.exists() && snap.val().code) {
       return snap.val().code;
     }
-    // Assign new sequential code via transaction
+    // Assign new sequential code via transaction.
+    // NOTE: Firebase transactions require client READ access on the
+    // path being transacted (the SDK reads the current value locally
+    // before proposing the write) — deviceCodeCounter's rule must allow
+    // "auth != null" read, not admin-only, or this permanently fails
+    // for every non-admin user regardless of timing. See the Rules
+    // update that must accompany this fix.
     let newCode = null;
     await db.ref('deviceCodeCounter').transaction(current => {
       const next = (current || 0) + 1;
@@ -2905,14 +2912,18 @@ async function checkMultiAccount(uid) {
     if(devSnap && devSnap.exists()) {
       const existingUid = devSnap.val().uid;
       if(existingUid && existingUid !== uid) {
-        // Different account on same device
-        // Show which Google account is registered
-        let existingEmail = '';
-        try {
-          const existingSnap = await db.ref('users/' + existingUid + '/email').get();
-          if(existingSnap.exists()) existingEmail = existingSnap.val();
-        } catch(e) {}
-        
+        // Different account on same device. NOTE: previously tried to
+        // read the OTHER account's email here to show an "already
+        // registered with: ..." hint — that read can never succeed
+        // (rules correctly block reading another user's email, which
+        // is also the right privacy behavior — a stranger shouldn't
+        // see someone else's email just by triggering this screen).
+        // It was a guaranteed, expected permission_denied on every
+        // single trigger of this block, adding pure noise to the
+        // console that made genuine timing-related errors harder to
+        // spot. Removed — the hint line just doesn't show anymore.
+        const existingEmail = '';
+
         // Build Royale-style multi-account block message
         const emailLine = existingEmail ? `<div style="background:#1f2937;border:1px solid #374151;border-radius:10px;padding:10px;margin:10px 0;font-size:0.82rem;color:#9ca3af;">📧 Already registered with:<br/><strong style="color:#fff;">${existingEmail}</strong></div>` : '';
         
@@ -3143,9 +3154,8 @@ async function enterApp() {
   // Process pending referral rewards — only ONCE per session
   if(firebaseReady && currentUser && !window._referralRewardsProcessed) {
     try {
-      const authReady = await waitForAuth();
+      const authReady = await waitForRtdbAuthReady();
       if(!authReady) throw new Error('Auth not ready — will retry next app open');
-      window._referralRewardsProcessed = true; // only mark done once we're actually about to process
       const rewardsSnap = await db.ref('referralRewards/' + currentUser).get();
       if(rewardsSnap && rewardsSnap.exists()) {
         const rewards = rewardsSnap.val();
@@ -3186,6 +3196,12 @@ async function enterApp() {
           showToast(`🎉 +${totalCoins} referral coins added!`);
         }
       }
+      // Only mark done AFTER genuinely completing this attempt (or
+      // finding nothing to process) — previously this was set BEFORE
+      // the actual credit write, so if that write failed partway, the
+      // reward would be permanently skipped for the rest of the
+      // session even if connectivity recovered a moment later.
+      window._referralRewardsProcessed = true;
     } catch(e) { console.warn('Referral rewards processing error:', e); }
   }
 
@@ -3220,23 +3236,12 @@ async function enterApp() {
       saveLocal();
     }
   }
-  // Check maintenance mode on startup
-  if (firebaseReady) {
-    // Realtime maintenance mode check
-    db.ref('appSettings').on('value', snap => {
-      if(!snap || !snap.exists()) return;
-      const s = snap.val();
-      const mainScreen = document.getElementById('maintenanceScreen');
-      if(!mainScreen) return;
-      if(s.maintenanceMode === true) {
-        document.getElementById('maintenanceMsg').textContent = s.maintenanceMsg || '🔧 EarnEasy is under maintenance. Back soon!';
-        mainScreen.style.display = 'flex';
-      } else {
-        mainScreen.style.display = 'none';
-      }
-      applyAdminSettings(s);
-    });
-  }
+  // NOTE: a duplicate inline "maintenance mode" appSettings listener
+  // used to live here — it re-implemented the same maintenanceMode
+  // display logic that applyAdminSettings() already handles, AND
+  // called applyAdminSettings() itself a second time on top of the
+  // _settingsRef listener below doing the same. Removed — the tracked
+  // _settingsRef listener further down covers this fully by itself.
 
   document.getElementById('loginScreen').classList.remove('active');
   document.getElementById('app').classList.add('active');
@@ -3356,12 +3361,22 @@ async function enterApp() {
   }
   // Update notif badge
   setTimeout(updateNotifBadge, 100);
-  // Offerwall settings realtime
-  if(firebaseReady) {
-    db.ref('offerwallSettings').on('value', snap => {
+  // Offerwall settings realtime — registered ONCE only. This used to
+  // be inside applyAdminSettings() itself, which is called every time
+  // ANY admin setting changes — meaning a brand new offerwallSettings
+  // listener was created on every single call with the previous one
+  // never removed, an actively growing leak for the lifetime of the
+  // session.
+  if(firebaseReady && !window._owSettingsListenerRef) {
+    window._owSettingsListenerRef = db.ref('offerwallSettings');
+    window._owSettingsListenerRef.on('value', snap => {
       window._owSettings = (snap && snap.exists()) ? snap.val() : {};
       updateOfferwallUI();
     });
+    // Not pushed to _earnEasyListeners — that array is per-login and
+    // gets wiped + re-created on every enterApp() call, but this
+    // listener isn't per-user and is meant to live for the whole app
+    // session exactly once, guarded by the ref check above.
   }
   setTimeout(updateOfferwallUI, 400);
   loadDynamicOfferwalls();
@@ -3407,6 +3422,7 @@ async function enterApp() {
         document.getElementById('app').classList.remove('active');
       }
     });
+    window._earnEasyListeners.push(_banRef);
     // Realtime coin sync (in case of discrepancy)
     const _coinsRef = db.ref('users/' + currentUser + '/coins');
     _coinsRef.on('value', snap => {
@@ -3420,7 +3436,8 @@ async function enterApp() {
       }
     });
     // Realtime name listener - ensures name never stays as 'User'
-    db.ref('users/' + currentUser + '/name').on('value', snap => {
+    const _nameRef = db.ref('users/' + currentUser + '/name');
+    _nameRef.on('value', snap => {
       if(snap.exists() && snap.val() && snap.val() !== 'User') {
         userData.name = snap.val();
         const greetEl = document.getElementById('greetName');
@@ -3428,6 +3445,7 @@ async function enterApp() {
         saveLocal();
       }
     });
+    window._earnEasyListeners.push(_nameRef);
     window._earnEasyListeners.push(_coinsRef);
     // Realtime notifications — always active for ALL devices so admin notifications arrive instantly
     const _notifRef = db.ref('users/' + currentUser + '/notifications');
@@ -3724,16 +3742,32 @@ async function checkAndClaimMilestones(referCount, milestones) {
   
   for(const m of milestones) {
     if(referCount >= m.refs && !claimed.includes(m.refs)) {
-      // Award milestone coins!
-      claimed.push(m.refs);
-      userData.claimedMilestones = claimed;
-      
+      const newClaimed = [...claimed, m.refs];
+      const newCoins = (userData.coins || 0) + m.coins;
+
+      // Single atomic multi-path update — credits coins AND marks the
+      // milestone claimed together. Previously these were two separate
+      // Firebase calls (a coins transaction, then a separate
+      // claimedMilestones .set()); a connection drop between them
+      // could leave coins credited but the "claimed" marker never
+      // saved, letting the same milestone be credited again on the
+      // next check (same failure shape referralRewards had, fixed the
+      // same way there).
       window._trustedCoinUpdate = true;
-      const milestoneResult = await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + m.coins);
-      userData.coins = milestoneResult.committed ? milestoneResult.snapshot.val() : ((userData.coins||0) + m.coins);
+      try {
+        await db.ref().update({
+          ['users/' + currentUser + '/coins']: newCoins,
+          ['users/' + currentUser + '/claimedMilestones']: newClaimed
+        });
+      } catch(e) {
+        window._trustedCoinUpdate = false;
+        console.warn('Milestone claim error:', e);
+        return; // don't touch local state or show success — nothing was saved
+      }
       window._trustedCoinUpdate = false;
-      
-      await db.ref('users/' + currentUser + '/claimedMilestones').set(claimed);
+
+      userData.coins = newCoins;
+      userData.claimedMilestones = newClaimed;
       updateUI();
       
       showModal('🎁', 'Milestone Reached!', 
@@ -4249,21 +4283,19 @@ function startCooldown(seconds) {
 }
 
 async function addCoins(amount, source, ymid) {
-  if (!firebaseReady || !currentUser) {
-    // Never silently credit coins ONLY to local storage and claim
-    // success — the next fresh Firebase load overwrites local state
-    // entirely, and that "earned" amount would just vanish with no
-    // trace, while the user believes they were paid. Try to recover
-    // readiness first; if we genuinely can't reach Firebase, be honest
-    // about it instead of lying with a success toast.
-    const ready = firebaseReady ? true : false;
-    if (!ready || !currentUser) {
-      const recovered = (typeof waitForRtdbAuthReady === 'function') ? await waitForRtdbAuthReady(3) : false;
-      if (!recovered || !currentUser) {
-        showModal('📵', 'Connection Issue', 'Could not save your coins — please check your internet and try again.', 'error');
-        return;
-      }
-    }
+  if (!currentUser) {
+    showModal('📵', 'Connection Issue', 'Could not save your coins — please check your internet and try again.', 'error');
+    return;
+  }
+  // Always verify genuine RTDB readiness here — never rely on the
+  // firebaseReady flag alone. That flag is set once at boot and never
+  // resets, so it says nothing about whether the connection is
+  // healthy right now; a coin credit is too financially important to
+  // trust a stale boolean for.
+  const ready = await waitForRtdbAuthReady();
+  if (!ready) {
+    showModal('📵', 'Connection Issue', 'Could not save your coins — please check your internet and try again.', 'error');
+    return;
   }
   db.ref('users/' + currentUser + '/coins').transaction(currentCoins => {
     return (currentCoins || 0) + amount;
@@ -4366,29 +4398,17 @@ function startFraudWatch() {
 // Every attempt gets logged — credited or flagged (fraud detected).
 // fraudFlagCount is a running per-user counter so the admin panel can
 // sort/flag repeat offenders without opening every log entry.
-// firebaseReady only means the SDK loaded — it says nothing about
-// whether the Auth session has actually been confirmed server-side yet
-// (there's a real gap between the two, especially right after a
-// persisted-login page load). Writes attempted during that gap fail
-// with permission_denied even though the app "looks" ready. This waits
-// for the REAL auth object to exist before proceeding.
-function waitForAuth(maxWaitMs) {
-  maxWaitMs = maxWaitMs || 3000;
-  return new Promise((resolve) => {
-    if (typeof firebase !== 'undefined' && firebase.auth().currentUser) { resolve(true); return; }
-    const start = Date.now();
-    const check = () => {
-      if (typeof firebase !== 'undefined' && firebase.auth().currentUser) { resolve(true); return; }
-      if (Date.now() - start > maxWaitMs) { resolve(false); return; }
-      setTimeout(check, 200);
-    };
-    check();
-  });
-}
+// NOTE: this file used to have a second, weaker readiness check here
+// (waitForAuth — checked only firebase.auth().currentUser, a
+// client-side object that can go non-null BEFORE the RTDB connection
+// has actually picked up the auth token). It was removed — every
+// caller now uses waitForRtdbAuthReady() (a real RTDB round-trip)
+// instead, since the weak version was exactly the gap that let
+// permission_denied recur in new places after each earlier fix.
 
 async function logAdAttempt(source, outcome, durationMs, reason) {
   if (!firebaseReady || !currentUser) return;
-  const authReady = await waitForAuth();
+  const authReady = await waitForRtdbAuthReady();
   if (!authReady) { console.warn('logAdAttempt: auth not ready, skipping'); return; }
   db.ref('adAttempts/' + currentUser).push({
     source: source || null,
@@ -5568,8 +5588,20 @@ async function submitWithdraw() {
     return;
   }
 
-  if (!firebaseReady || !currentUser) {
+  if (!currentUser) {
     showModal('❌', 'No Internet', 'Internet required to withdraw!', 'error');
+    _withdrawProcessing = false;
+    return;
+  }
+  // This function had no genuine readiness verification at all before —
+  // only the stale firebaseReady flag, which barely means anything
+  // after the very first successful boot. A withdrawal is the single
+  // most financially sensitive operation in the app; it must not
+  // proceed on an assumption.
+  const _withdrawRtdbReady = await waitForRtdbAuthReady();
+  if (!_withdrawRtdbReady) {
+    showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
+    _withdrawProcessing = false;
     return;
   }
 
@@ -5593,8 +5625,14 @@ async function submitWithdraw() {
   };
 
   // Declared here (not inside try) so the catch block's rollback can
-  // also reference the exact same amount
+  // also reference the exact same amount. deductionCommitted tracks
+  // whether the atomic deduction below ACTUALLY succeeded — if the
+  // transaction call itself throws (permission_denied, network error)
+  // rather than just resolving with committed:false, deductResult is
+  // never assigned and this stays false, so the catch block below
+  // knows NOT to refund coins that were never actually deducted.
   const coinsToDeduct = Math.round(requiredCoins);
+  let deductionCommitted = false;
 
   try {
     // Capture BEFORE unshift — needed for the 'first_withdrawal' referral trigger mode
@@ -5616,6 +5654,7 @@ async function submitWithdraw() {
       showModal('❌', 'Not Enough Coins! 💰', `You need ${coinsToDeduct.toLocaleString()} coins to withdraw ₹${amount}, but you only have ${(userData.coins||0).toLocaleString()} coins. Keep earning!`, 'error');
       return;
     }
+    deductionCommitted = true; // only from here on is a refund on later failure ever appropriate
     const newCoins = deductResult.snapshot.val();
     userData.coins = newCoins;
     userData.totalWithdrawn = (userData.totalWithdrawn||0) + amount;
@@ -5659,17 +5698,20 @@ async function submitWithdraw() {
     showModal('🎉', 'Withdraw Submitted! ✅', '₹' + amount + ' withdraw request submitted successfully! ' + withdrawMsg, 'success');
 
   } catch(e) {
-    // The coin deduction above is atomic and already committed by the
-    // time we could reach here from a LATER step failing — refund it
-    // the same safe way (a transaction add-back), never a blind local
-    // "+= amount" that could itself race with something else.
-    db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coinsToDeduct).then(r => {
-      if (r.committed) userData.coins = r.snapshot.val();
-    }).catch(()=>{});
-    userData.totalWithdrawn = Math.max(0, (userData.totalWithdrawn||0) - amount);
-    // Remove the entry we added optimistically
-    if(userData.withdrawHistory && userData.withdrawHistory[0]?.requestId === requestId) {
-      userData.withdrawHistory.shift();
+    // Only refund if the deduction actually committed. If the
+    // transaction call itself threw (permission_denied, network error)
+    // rather than resolving normally, deductionCommitted stays false —
+    // refunding here would have handed out coins that were never
+    // deducted in the first place (free coins).
+    if (deductionCommitted) {
+      db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coinsToDeduct).then(r => {
+        if (r.committed) userData.coins = r.snapshot.val();
+      }).catch(()=>{});
+      userData.totalWithdrawn = Math.max(0, (userData.totalWithdrawn||0) - amount);
+      // Remove the entry we added optimistically
+      if(userData.withdrawHistory && userData.withdrawHistory[0]?.requestId === requestId) {
+        userData.withdrawHistory.shift();
+      }
     }
     saveLocal(); updateUI();
     _withdrawProcessing = false; btn.textContent = origText; btn.disabled = false;
@@ -6027,7 +6069,19 @@ async function checkAndUpdateStreak() {
 
 // User taps a streak day to claim
 async function claimStreakDay() {
-  if(!firebaseReady || !currentUser) return;
+  if (!currentUser) {
+    showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
+    return;
+  }
+  // Same principle as the other financial functions — never trust the
+  // stale firebaseReady flag for something that credits coins. This
+  // function previously had no readiness check at all and would just
+  // silently do nothing if Firebase wasn't actually usable.
+  const _streakRtdbReady = await waitForRtdbAuthReady();
+  if (!_streakRtdbReady) {
+    showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
+    return;
+  }
   const today = getToday();
   const s = userData.streak || {count:0, lastDay:'', claimedToday:false};
 
@@ -6438,7 +6492,34 @@ window.addEventListener('load', async () => {
   // Auth state — keep splash visible until auth check done (prevents login flash)
   let _authResolved = false;
   firebase.auth().onAuthStateChanged(async (user) => {
-    if(document.getElementById('app').classList.contains('active')) return;
+    const _appIsActive = document.getElementById('app').classList.contains('active');
+
+    // MID-SESSION AUTH LOSS — must be checked FIRST, before the
+    // boot-time early-return below. This fires when the app was
+    // already running normally and Auth suddenly reports no user
+    // (token expiry, or a hiccup during the SDK's normal refresh).
+    // Previously this check lived AFTER an early-return that fires on
+    // the exact same "app is active" condition with no await in
+    // between — meaning by the time execution could reach this check,
+    // the condition had already been evaluated false once and could
+    // not have changed, making the whole recovery branch dead code.
+    // Checking the OPPOSITE case (active + NO user) up here, before
+    // that early-return, is what actually makes it reachable.
+    if (_appIsActive && !user) {
+      console.warn('Auth session lost mid-use — attempting silent re-auth');
+      if (isTelegramEnv()) {
+        telegramAutoLogin();
+      } else {
+        // Google/browser: can't silently re-trigger signInWithPopup
+        // without a user gesture. Firebase's own LOCAL persistence
+        // should normally restore this on its own; if we're seeing
+        // null here anyway, surface it rather than fail silently.
+        showToast('⚠️ Connection lost — please reopen the app');
+      }
+      return;
+    }
+
+    if(_appIsActive) return; // app active + user still present — nothing new to do
     const setup = document.getElementById('profileSetupScreen');
     if(setup && setup.style.display==='flex') return;
     if(user) {
@@ -6502,9 +6583,8 @@ window.addEventListener('load', async () => {
           _pendingGoogleUser = user; showProfileSetup(user);
         }
       }
-    } else {
-      // No user — wait briefly so Firebase can check IndexedDB persistence before showing loginScreen
-      if(!_authResolved) {
+      } else {
+        if(!_authResolved) {
         // If user has local data saved — they're probably logged in, wait longer to avoid flash
         const _hasLocalUser = !!localStorage.getItem('earneasy_uid');
         const _waitTime = _hasLocalUser ? 3000 : 800; // Logged-in users get more time before showing login screen
@@ -6526,29 +6606,8 @@ window.addEventListener('load', async () => {
             }
           }
         }, _waitTime);
-      } else if (document.getElementById('app').classList.contains('active')) {
-        // MID-SESSION AUTH LOSS: the app was already running with a
-        // valid session and Firebase Auth just lost it (token
-        // expired/revoked, or a hiccup during the SDK's normal refresh).
-        // This used to be silently ignored — nothing re-authenticated,
-        // and every subsequent Firebase call just failed in the
-        // background with permission_denied and no visible cause.
-        // Now: try to silently re-establish the session the same way
-        // login normally happens, without disrupting what the user is
-        // doing (no full reload, no visible login screen unless this
-        // recovery attempt itself fails).
-        console.warn('Auth session lost mid-use — attempting silent re-auth');
-        if (isTelegramEnv()) {
-          telegramAutoLogin();
-        } else {
-          // Google/browser: can't silently re-trigger signInWithPopup
-          // without a user gesture. Firebase's own LOCAL persistence
-          // should normally restore this on its own; if we're seeing
-          // null here anyway, surface it rather than fail silently.
-          showToast('⚠️ Connection lost — please reopen the app');
         }
       }
-    }
     _authResolved = true;
   });
 });
@@ -6589,8 +6648,5 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-<!-- index.html mein add karo body ke end mein -->
-<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-<script>eruda.init();</script>
 </body>
 </html>
