@@ -1776,38 +1776,48 @@ function initFirebase() {
       firebase.initializeApp(FIREBASE_CONFIG);
       db = firebase.database();
     }
-    // Set persistence so same UID is reused across sessions
-    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL)
-      .then(() => firebase.auth().signInAnonymously())
-      .then(async (result) => {
-        const adminUid = result.user.uid;
-        console.log('Admin Firebase Auth OK ✅ UID:', adminUid);
-        // Save UID to localStorage so we know it persists
-        localStorage.setItem('adminUID', adminUid);
-        // Register this UID as admin in Firebase
-        logAdminAction('ADMIN_LOGIN', 'Admin logged in');
-        await db.ref('adminUIDs/' + adminUid).set({
-          active: true,
-          lastLogin: Date.now()
-        });
-        console.log('Admin UID registered:', adminUid);
-        // Small delay for rules to take effect
-        setTimeout(() => {
-          refreshAdminPassword();
-          loadDashboard();
-          setupAdminRealtimeListeners();
-        }, 1500);
-      }).catch(e => {
-        console.warn('Auth error:', e.message);
-        showToast('Auth failed: ' + e.message, 'danger');
-        setTimeout(() => loadDashboard(), 1000);
-      });
+    // CRITICAL FIX: this used to also do signInAnonymously() and, on
+    // success, immediately self-register that UID into adminUIDs with
+    // active:true — UNCONDITIONALLY, on every page load, before any
+    // password was ever entered. Firebase's rule for adminUIDs allows a
+    // user to write their own UID in (`auth.uid == $adminUid`), which is
+    // needed for the real unlock flow below — but calling that write
+    // automatically here meant ANYONE who simply opened admin.html (or
+    // even just called the Firebase Web SDK directly, since the config is
+    // necessarily public/client-side) became a fully-privileged admin —
+    // full read/write on every user's data, appSettings, and adminConfig
+    // (including the admin password itself) — without the password check
+    // in doUnlock() ever running at all. It also explains the "new admin
+    // every login" symptom: a fresh anonymous sign-in can get a new UID,
+    // and each one auto-registered itself the same way.
+    // The sign-in + registration now happen ONLY inside doUnlock(), and
+    // only after the entered password is actually verified. This function
+    // now does nothing but connect to Firebase — no auth, no permissions.
     console.log('Firebase connected ✅');
     return true;
   } catch(e) {
     console.warn('Firebase error:', e.message);
     showToast('Firebase connection failed! Check internet.','danger');
     return false;
+  }
+}
+
+// SHA-256 hex digest, Web Crypto API (native, no dependency). Used so the
+// admin/ambassador password can be verified WITHOUT needing to already be
+// a registered admin to read it — a hash is safe to expose to any signed-in
+// (even anonymous, unverified) visitor, since it can't be reversed back
+// into the real password, unlike the old plaintext adminConfig/password.
+async function sha256(str) {
+  try {
+    const enc = new TextEncoder();
+    const buf = await crypto.subtle.digest('SHA-256', enc.encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch(e) {
+    // Extremely old browser without crypto.subtle — weak fallback, still
+    // better than nothing and still never exposes the plaintext password.
+    let h = 5381;
+    for(let i = 0; i < str.length; i++) { h = ((h << 5) + h) + str.charCodeAt(i); h = h & h; }
+    return Math.abs(h).toString(16).padStart(16, '0');
   }
 }
 
@@ -1911,27 +1921,66 @@ async function doUnlock(pw) {
   if(btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...'; btn.disabled = true; }
   document.getElementById('lockAttempts').textContent = '';
 
-  // Get valid password: Firebase first (with 4s timeout), hardcoded as fallback
-  let validPassword = ADMIN_PASSWORD;
+  // Make sure Firebase is connected (in case something delayed initFirebase()).
+  if(!db) initFirebase();
+
+  // Get (or create) an anonymous auth session. On its own this grants NO
+  // database permissions whatsoever — adminUIDs is only written below,
+  // after the password check passes.
+  try {
+    if(!firebase.auth().currentUser) {
+      await firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+      await firebase.auth().signInAnonymously();
+    }
+  } catch(e) {
+    console.warn('Anonymous auth error:', e.message);
+  }
+
+  // Verify password against the Firebase-stored HASH (readable by anyone
+  // signed in, admin or not — see sha256() above for why that's safe),
+  // falling back to the hardcoded default only for the very first-ever
+  // unlock on a fresh install (no hash saved yet anywhere).
+  let passwordOk = false;
+  let storedHashExists = false;
   if(db) {
     try {
       const s = await Promise.race([
-        db.ref('adminConfig/password').get(),
+        db.ref('adminConfig/passwordHash').get(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000))
       ]);
       if(s && s.exists() && s.val()) {
-        validPassword = s.val();
+        storedHashExists = true;
+        passwordOk = (await sha256(pw)) === s.val();
       } else {
-        // First time: save default password to Firebase (best effort)
-        db.ref('adminConfig/password').set(ADMIN_PASSWORD).catch(() => {});
+        passwordOk = (pw === ADMIN_PASSWORD);
       }
     } catch(e) {
       console.warn('PW Firebase check failed, using default:', e.message);
       // Falls back to ADMIN_PASSWORD — correct password still works
+      passwordOk = (pw === ADMIN_PASSWORD);
     }
+  } else {
+    passwordOk = (pw === ADMIN_PASSWORD);
   }
 
-  if(pw === validPassword) {
+  if(passwordOk) {
+    // Password verified — NOW (and only now) register this session as
+    // admin. This is the write that used to happen unconditionally on
+    // every page load before any check at all.
+    try {
+      const uid = firebase.auth().currentUser.uid;
+      localStorage.setItem('adminUID', uid);
+      await db.ref('adminUIDs/' + uid).set({ active: true, lastLogin: Date.now() });
+      if(!storedHashExists) {
+        // First-ever unlock — bootstrap the hash into Firebase so future
+        // logins (including from other devices) can verify against it.
+        await db.ref('adminConfig/passwordHash').set(await sha256(ADMIN_PASSWORD)).catch(()=>{});
+      }
+      logAdminAction('ADMIN_LOGIN', 'Admin logged in');
+    } catch(e) {
+      console.warn('Admin registration error:', e.message);
+    }
+
     sessionStorage.setItem('adminUnlocked', '1');
     document.getElementById('lockScreen').style.transition = 'opacity 0.4s';
     document.getElementById('lockScreen').style.opacity = '0';
@@ -1939,10 +1988,13 @@ async function doUnlock(pw) {
       document.getElementById('lockScreen').style.display = 'none';
       document.getElementById('adminApp').classList.add('active');
     }, 400);
-    // Load dashboard after 2 seconds so adminUID is definitely registered in Firebase by then
+    // Small delay for the adminUIDs write above to be visible to rules,
+    // then load the dashboard and start realtime listeners (previously
+    // this only happened inside initFirebase()'s auto-registration chain).
     setTimeout(() => {
       if(typeof loadDashboard === 'function') loadDashboard();
-    }, 2000);
+      if(typeof setupAdminRealtimeListeners === 'function') setupAdminRealtimeListeners();
+    }, 800);
   } else {
     // Wrong password
     if(btn) { btn.innerHTML = origHTML; btn.disabled = false; }
@@ -2067,15 +2119,32 @@ async function doBALogin() {
   if(!pw) return;
   
   if(!db) { initFirebase(); await new Promise(r => setTimeout(r, 2000)); }
-  
-  let baPw = BA_DEFAULT_PASSWORD;
+
+  // Same pattern as the main admin login: sign in anonymously (grants
+  // nothing by itself), verify against a Firebase-stored HASH (safe to
+  // read pre-registration), then — only on success — register into
+  // ambassadorUIDs (a separate, lower-privilege node from adminUIDs; an
+  // Ambassador should be able to create promo codes but must NOT get the
+  // same full-database access a real admin gets).
   try {
-    const s = await db.ref('adminConfig/ambassadorPassword').get();
-    if(s && s.exists()) baPw = s.val();
-    else db.ref('adminConfig/ambassadorPassword').set(BA_DEFAULT_PASSWORD).catch(()=>{});
-  } catch(e) {}
+    if(!firebase.auth().currentUser) await firebase.auth().signInAnonymously();
+  } catch(e) { console.warn('BA anon auth error:', e.message); }
+
+  let baOk = false, hashExists = false;
+  try {
+    const s = await db.ref('adminConfig/ambassadorPasswordHash').get();
+    if(s && s.exists() && s.val()) { hashExists = true; baOk = (await sha256(pw)) === s.val(); }
+    else { baOk = (pw === BA_DEFAULT_PASSWORD); }
+  } catch(e) { baOk = (pw === BA_DEFAULT_PASSWORD); }
   
-  if(pw === baPw) {
+  if(baOk) {
+    try {
+      const uid = firebase.auth().currentUser.uid;
+      await db.ref('ambassadorUIDs/' + uid).set({ active: true, lastLogin: Date.now() });
+      if(!hashExists) {
+        await db.ref('adminConfig/ambassadorPasswordHash').set(await sha256(BA_DEFAULT_PASSWORD)).catch(()=>{});
+      }
+    } catch(e) { console.warn('BA registration error:', e.message); }
     document.getElementById('baContent').style.display = 'none';
     document.getElementById('baPanel').style.display = 'block';
     loadBAPromoCodes();
@@ -3730,7 +3799,12 @@ function removeChip(amt) {
 async function saveAmbassadorPassword() {
   const pw = document.getElementById('ba-new-pw')?.value?.trim();
   if(!pw || pw.length < 6) { showToast('Min 6 characters!','danger'); return; }
-  await db.ref('adminConfig/ambassadorPassword').set(pw);
+  // Hash, never plaintext — same scheme as the main admin password, and
+  // required now since ambassadorPasswordHash is readable by any signed-in
+  // visitor (so doBALogin() can verify it before that visitor is
+  // registered anywhere) — storing this as plaintext would leak the real
+  // ambassador password to literally anyone.
+  await db.ref('adminConfig/ambassadorPasswordHash').set(await sha256(pw));
   document.getElementById('ba-new-pw').value = '';
   showToast('✅ Ambassador password updated!');
   logAdminAction('BA_PW_CHANGE', 'Ambassador password changed');
@@ -3744,13 +3818,18 @@ async function changeAdminPassword() {
   if(!currentPw || !newPw || !confirmPw) {
     showToast('Fill all password fields!','danger'); return;
   }
-  // Verify against Firebase stored password
-  let _storedPw = ADMIN_PASSWORD;
+  // Verify against the Firebase-stored hash (matches doUnlock()'s scheme —
+  // plaintext is never stored anymore, only a SHA-256 hash)
+  let currentOk = false;
   try {
-    const s = await db.ref('adminConfig/password').get();
-    if(s.exists()) _storedPw = s.val();
-  } catch(e){}
-  if(currentPw !== _storedPw) {
+    const s = await db.ref('adminConfig/passwordHash').get();
+    if(s.exists() && s.val()) {
+      currentOk = (await sha256(currentPw)) === s.val();
+    } else {
+      currentOk = (currentPw === ADMIN_PASSWORD);
+    }
+  } catch(e) { currentOk = (currentPw === ADMIN_PASSWORD); }
+  if(!currentOk) {
     showToast('❌ Current password wrong!','danger'); return;
   }
   // #28 Strong password policy
@@ -3766,11 +3845,9 @@ async function changeAdminPassword() {
   if(newPw !== confirmPw) {
     showToast('❌ Passwords do not match!','danger'); return;
   }
-  // Save new password to Firebase
+  // Save new password to Firebase — as a hash, never plaintext
   try {
-    await db.ref('adminConfig/password').set(newPw);
-    // Update local constant (runtime only)
-    window.ADMIN_PASSWORD_OVERRIDE = newPw;
+    await db.ref('adminConfig/passwordHash').set(await sha256(newPw));
     document.getElementById('set-currentPw').value = '';
     document.getElementById('set-newPw').value = '';
     document.getElementById('set-confirmPw').value = '';
@@ -4275,30 +4352,36 @@ function showToast(msg, type='success') {
 // INIT
 // ============================================================
 window.addEventListener('load', async () => {
-  // Init Firebase on load (handles auth, adminUID registration, and loadDashboard after 1500ms)
+  // Just connects to Firebase — no auth, no permissions granted here (see
+  // initFirebase() above for why that changed). The real sign-in +
+  // admin registration only happens inside doUnlock(), after a correct
+  // password.
   initFirebase();
 
   if(sessionStorage.getItem('adminUnlocked') === '1') {
+    // Same tab/browser, already unlocked earlier this session. Firebase
+    // Auth's LOCAL persistence should silently restore the same anonymous
+    // UID (already registered in adminUIDs from that earlier unlock)
+    // without needing the password again — wait for that restore before
+    // trusting the dashboard to load.
     document.getElementById('lockScreen').style.display = 'none';
     document.getElementById('adminApp').classList.add('active');
-    // initFirebase will call loadDashboard after adminUID is registered (~1500ms)
-    // Extra fallback in case initFirebase timer already fired before this runs
-    setTimeout(() => {
-      if(typeof loadDashboard === 'function' && db) loadDashboard();
-    }, 2000);
+    firebase.auth().onAuthStateChanged(user => {
+      if(user && db) {
+        if(typeof loadDashboard === 'function') loadDashboard();
+        if(typeof setupAdminRealtimeListeners === 'function') setupAdminRealtimeListeners();
+      } else {
+        // Persisted session didn't restore (cleared storage, new device
+        // sharing the same sessionStorage some other way, etc.) — don't
+        // sit on a dashboard that can't actually read anything; send back
+        // to the password screen instead of showing empty/broken data.
+        sessionStorage.removeItem('adminUnlocked');
+        document.getElementById('adminApp').classList.remove('active');
+        document.getElementById('lockScreen').style.display = 'flex';
+      }
+    });
   }
 });
-
-// Override ADMIN_PASSWORD with Firebase value on startup
-async function refreshAdminPassword() {
-  if(!db) return;
-  try {
-    const snap = await db.ref('adminConfig/password').get();
-    if(snap && snap.exists() && snap.val()) {
-      window._DYNAMIC_ADMIN_PW = snap.val();
-    }
-  } catch(e) {}
-}
 </script>
 <!-- index.html mein add karo body ke end mein -->
 <script src="https://cdn.jsdelivr.net/npm/eruda"></script>

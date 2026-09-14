@@ -52,19 +52,28 @@ ONE copy, right here, and the second location just points back to it.
     },
     "usernames": { ".read": "auth != null", "$name": { ".write": "auth != null && (!data.exists() || data.val() == auth.uid)" } },
     "adminUIDs": { ".read": "auth != null", "$adminUid": { ".write": "auth != null && (auth.uid == $adminUid || root.child('adminUIDs').child(auth.uid).exists())" } },
+    "ambassadorUIDs": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$baUid": { ".write": "auth != null && (auth.uid == $baUid || root.child('adminUIDs').child(auth.uid).exists())" }
+    },
     "referLookup": { ".read": "auth != null", "$code": { ".write": "auth != null && !data.exists()" } },
     "tasks": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "promoCodes": {
       ".read": "auth != null",
       ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$code": { ".write": "auth != null", "usedCount": { ".write": "auth != null" } }
+      "$code": { ".write": "auth != null && (root.child('adminUIDs').child(auth.uid).exists() || root.child('ambassadorUIDs').child(auth.uid).exists())", "usedCount": { ".write": "auth != null" } }
     },
     "appSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "offerwallSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
     "withdrawRequests": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$requestId": { ".write": "auth != null" } },
     "adminNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
     "sentNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "adminConfig": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "adminConfig": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "passwordHash": { ".read": "auth != null" },
+      "ambassadorPasswordHash": { ".read": "auth != null" }
+    },
     "deviceFingerprints": {
       ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
       ".indexOn": ["uid"],
@@ -151,6 +160,42 @@ ONE copy, right here, and the second location just points back to it.
 *** could NEVER succeed for a normal user, unconditionally, regardless
 *** of any timing fix. This rules change MUST be published for that fix
 *** to actually work — it cannot be fixed from the JavaScript side alone.
+
+*** IMPORTANT (Extra-effort security audit): admin.html used to
+*** auto-register ANY visitor as a full admin the moment the page
+*** loaded, before any password check — see the comment at the top of
+*** initFirebase() in admin.html for the full explanation. The fix
+*** moved that registration into doUnlock(), after the password is
+*** verified against a SHA-256 hash instead of a plaintext value, which
+*** requires THESE rules changes to actually work (the code alone can't
+*** do it):
+***   1. "adminConfig/passwordHash" and "adminConfig/ambassadorPasswordHash"
+***      now have their OWN ".read": "auth != null" — readable by any
+***      signed-in (even anonymous, unregistered) visitor. This is safe
+***      because a hash can't be reversed into the real password, and it's
+***      required so doUnlock()/doBALogin() can verify a login attempt
+***      BEFORE that visitor is registered as admin/ambassador. Writing
+***      these still requires already being an admin (inherited from the
+***      parent adminConfig .write rule, unchanged).
+***   2. New "ambassadorUIDs" node added, mirroring "adminUIDs" but for
+***      the lower-privilege Brand Ambassador role — so a verified
+***      Ambassador gets ONLY promo-code-creation rights, not full admin
+***      database access (which is what accidentally happened before,
+***      since Ambassadors hitting admin.html triggered the SAME
+***      unconditional adminUIDs auto-registration bug as everyone else).
+***   3. "promoCodes/$code" write access tightened from "auth != null"
+***      (ANY signed-in user — including a completely ordinary EarnEasy
+***      app user who just signed in with Google/Telegram, not just
+***      admin/ambassador) to admin-or-ambassador only. The old rule meant
+***      any regular app user could call the Firebase SDK directly and
+***      mint themselves an arbitrary promo code for free coins, bypassing
+***      the app UI entirely. "usedCount"'s own write rule is UNCHANGED
+***      (still "auth != null") since normal users still need to be able
+***      to redeem a code via claimPromo().
+*** The old plaintext "adminConfig/password" and
+*** "adminConfig/ambassadorPassword" fields are no longer written or read
+*** by the app — safe to leave any old values there alone (they're
+*** simply unused now) or delete them, either is fine.
 -->
 <html lang="en">
 <head>
@@ -2246,12 +2291,16 @@ async function resetDailyLimits(today) {
 function saveData() {
   saveLocal();
   if (firebaseReady && currentUser) {
-    // Save to Firebase - remove uid from saved data to avoid redundancy.
+    // Save to Firebase - remove uid from saved data to avoid redundancy
+    // (it's already the record's own key, users/{uid}). Previously this
+    // comment existed but the code never actually did it, so every save
+    // wrote a harmless-but-pointless duplicate `uid` field.
     // Uses update() not set() — if userData is ever incomplete in memory
     // (e.g. loaded mid-way through a timing-sensitive window), update()
     // only touches the keys we actually have, instead of silently
     // wiping out any Firebase field we don't currently hold locally.
     const toSave = {...userData};
+    delete toSave.uid;
     db.ref('users/' + currentUser).update(toSave)
       .catch(e => console.warn('Firebase save error:', e.message));
     // Register referCode in referLookup only once per session (rules: !data.exists())
@@ -3083,7 +3132,19 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
           showToast(`🎉 Referral bonus! +${refCoins} coins!`);
           const triggerMode = (window._appSettings && window._appSettings.referralRule) || 'ads_games';
           if(triggerMode === 'immediate') {
-            grantReferralReward(); // fire-and-forget — currentUser is already set to uid at this point
+            // Awaited (not fire-and-forget) — currentUser is already set to
+            // uid at this point. This used to fire without awaiting, right
+            // before saveData() below; saveData() would then write a STALE
+            // in-memory referralRewardGranted:false snapshot to Firebase
+            // via .update(), which — depending on network timing — could
+            // land after this transaction's own referralRewardGranted:true
+            // write and clobber it back to false. Not a double-payout risk
+            // (the referralRewards/.../{uid} write this makes has its own
+            // !data.exists() rule that blocks a second grant regardless),
+            // just a bookkeeping/audit-trail inconsistency — but awaiting
+            // it means userData.referralRewardGranted is already correctly
+            // true by the time saveData() reads userData below.
+            await grantReferralReward();
           }
         }
       }
@@ -3577,14 +3638,19 @@ function applyAdminSettings(s) {
   }
 
   // ============ COIN RATE ============
-  if(s.coinRate) window.COIN_RATE_DYNAMIC = 10 / s.coinRate;
-
   // (mathLimitMax/captchaLimitMax/colorLimitMax removed — resetDailyLimits()
   // now reads window._appSettings directly, always live, never stale)
   // CORRECT coin rate: s.coinRate = coins per ₹10 (e.g. 1000 = 1000 coins per ₹10)
+  // NOTE: only window.COIN_RATE_DYNAMIC is set here, never a plain
+  // "COIN_RATE" — the real COIN_RATE is a top-level `const` (line ~1848),
+  // and top-level const/let bindings are NOT attached to `window`, so a
+  // `window.COIN_RATE = ...` assignment used to create an entirely
+  // separate, unrelated global that nothing else ever read — the actual
+  // withdraw-page display kept showing the fixed default rate no matter
+  // what admin set here. Every rate-sensitive spot now reads
+  // `window.COIN_RATE_DYNAMIC || COIN_RATE` instead.
   if (s.coinRate) {
-    window.COIN_RATE = 10 / s.coinRate; // rupees per coin (e.g. 0.01)
-    window.COIN_RATE_DYNAMIC = window.COIN_RATE;
+    window.COIN_RATE_DYNAMIC = 10 / s.coinRate; // rupees per coin (e.g. 0.01)
   }
   // Apply min withdraw
   if (s.minWithdraw) {
@@ -3671,7 +3737,7 @@ function updateUI() {
 
   // Withdraw page
   document.getElementById('wCoins').textContent = (userData.coins || 0).toLocaleString();
-  document.getElementById('wRupees').textContent = '₹' + ((userData.coins||0) * COIN_RATE).toFixed(2);
+  document.getElementById('wRupees').textContent = '₹' + ((userData.coins||0) * (window.COIN_RATE_DYNAMIC || COIN_RATE)).toFixed(2);
 
   // Refer
   document.getElementById('referCount').textContent = userData.referCount || 0;
@@ -3753,18 +3819,15 @@ async function checkAndClaimMilestones(referCount, milestones) {
       // saved, letting the same milestone be credited again on the
       // next check (same failure shape referralRewards had, fixed the
       // same way there).
-      window._trustedCoinUpdate = true;
       try {
         await db.ref().update({
           ['users/' + currentUser + '/coins']: newCoins,
           ['users/' + currentUser + '/claimedMilestones']: newClaimed
         });
       } catch(e) {
-        window._trustedCoinUpdate = false;
         console.warn('Milestone claim error:', e);
         return; // don't touch local state or show success — nothing was saved
       }
-      window._trustedCoinUpdate = false;
 
       userData.coins = newCoins;
       userData.claimedMilestones = newClaimed;
@@ -4530,39 +4593,66 @@ function showBonusAd() {
   if(btn) { btn.textContent = 'Loading Ad...'; btn.disabled = true; btn.style.opacity = '0.7'; }
 
   const bonusCoins = (window._appSettings && window._appSettings.bonusCoins) ? window._appSettings.bonusCoins : 10;
-  const ymid = generateYmid();
-  registerPendingClaim(ymid, bonusCoins, 'Daily Bonus');
-  const watch = startFraudWatch();
+  const today = getToday();
 
-  showDailyAd((completed, elapsedMs) => {
-    watch.stop();
-    if (!completed) {
-      cancelPendingClaim(ymid);
-      logAdAttempt('Daily Bonus', 'flagged', elapsedMs, 'sdk_error');
+  // Atomic guard. claimBonus()'s check before this was a plain one-time
+  // read — it can't stop two concurrent sessions (two tabs, or web +
+  // Telegram logged into the same account) both starting this flow before
+  // either one's final write lands, since bonusDate only actually gets
+  // written after the ~17s ad-watch completes. This transaction reserves
+  // today's claim immediately, so only the first caller can proceed;
+  // rolled back below if the ad fails or is flagged.
+  let previousBonusDate = null;
+  db.ref('users/' + currentUser + '/bonusDate').transaction(existing => {
+    previousBonusDate = existing;
+    if (existing === today) return; // abort — already claimed today
+    return today;
+  }).then(guardResult => {
+    if (!guardResult.committed) {
       if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
-      showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your bonus!', 'error');
-      return;
-    }
-    if (watch.flagged || elapsedMs < AD_REQUIRED_MS) {
-      cancelPendingClaim(ymid);
-      logAdAttempt('Daily Bonus', 'flagged', elapsedMs, watch.reason || 'quick_resolve');
-      if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
-      showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
-      return;
-    }
-    // Ad flow finished, fraud-watch clear — credit instantly.
-    userData.bonusClaimed = true;
-    if (firebaseReady) {
-      const today = getToday();
-      db.ref('users/' + currentUser).update({bonusClaimed: true, bonusDate: today}).catch(()=>{});
+      userData.bonusClaimed = true;
       userData.bonusDate = today;
+      saveLocal();
+      showModal('⏳', 'Already Claimed!', 'You already claimed your daily bonus today. Come back tomorrow! 🌅', 'info');
+      return;
     }
-    addCoins(bonusCoins, 'Daily Bonus', ymid);
-    logAdAttempt('Daily Bonus', 'credited', elapsedMs, null);
-    showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
-    updateUI();
-    if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
-  }, ymid);
+    const rollbackBonusGuard = () => { db.ref('users/' + currentUser + '/bonusDate').set(previousBonusDate || null).catch(()=>{}); };
+
+    const ymid = generateYmid();
+    registerPendingClaim(ymid, bonusCoins, 'Daily Bonus');
+    const watch = startFraudWatch();
+
+    showDailyAd((completed, elapsedMs) => {
+      watch.stop();
+      if (!completed) {
+        cancelPendingClaim(ymid);
+        logAdAttempt('Daily Bonus', 'flagged', elapsedMs, 'sdk_error');
+        rollbackBonusGuard();
+        if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
+        showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your bonus!', 'error');
+        return;
+      }
+      if (watch.flagged || elapsedMs < AD_REQUIRED_MS) {
+        cancelPendingClaim(ymid);
+        logAdAttempt('Daily Bonus', 'flagged', elapsedMs, watch.reason || 'quick_resolve');
+        rollbackBonusGuard();
+        if(btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = 'CLAIM'; btn.className = 'btn-bonus claim'; }
+        showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
+        return;
+      }
+      // Ad flow finished, fraud-watch clear — credit instantly. bonusDate
+      // was already committed above by the guard transaction; just mark
+      // bonusClaimed too.
+      userData.bonusClaimed = true;
+      userData.bonusDate = today;
+      db.ref('users/' + currentUser + '/bonusClaimed').set(true).catch(()=>{});
+      addCoins(bonusCoins, 'Daily Bonus', ymid);
+      logAdAttempt('Daily Bonus', 'credited', elapsedMs, null);
+      showModal('🎁', 'Daily Bonus! 🎉', `You received ${bonusCoins} coins as your daily bonus! Come back tomorrow for more!`, 'success');
+      updateUI();
+      if(btn) { btn.textContent = 'Claimed ✓'; btn.disabled = true; }
+    }, ymid);
+  });
 }
 
 // ============================================================
@@ -5007,6 +5097,16 @@ function startTask(id, coins, duration, link, btn, showAd) {
     return;
   }
 
+  // Disable the button SYNCHRONOUSLY, right now, before the Firebase check
+  // below even starts — same reason the popup branch above already does
+  // this immediately. Without this, a fast double-tap fires startTask()
+  // twice before the first call's "already completed?" read resolves;
+  // both invocations see "not completed" and both eventually credit
+  // coins, a real double-payout window on this specific task.
+  btn.className = 'btn-task timing';
+  btn.onclick = null;
+  btn.textContent = '⏳ ...';
+
   // FIREBASE-authoritative: check if already completed
   db.ref('users/' + currentUser + '/completedTasks/' + id).once('value').then(snap => {
     if (snap.exists()) {
@@ -5132,6 +5232,17 @@ function startTask(id, coins, duration, link, btn, showAd) {
     }
   }).catch(e => {
     logError(e, 'startTask-check');
+    // Button was disabled synchronously above (before this check even ran)
+    // to close the double-tap race — so on a genuine failure here it must
+    // be restored to a retryable state, or the user would be stuck with a
+    // dead button until they reload the page.
+    btn.className = 'btn-task start';
+    btn.textContent = 'START';
+    btn.onclick = () => {
+      window._currentTaskType = taskType;
+      window._currentTaskAdType = taskAdType;
+      startTask(id, coins, duration, link, btn, showAd);
+    };
     showToast('❌ Error. Try again!');
   });
 }
@@ -5574,8 +5685,8 @@ async function submitWithdraw() {
     _withdrawProcessing = false;
     return; 
   }
-  if (!amount || isNaN(amount) || amount <= 0) { showModal('⚠️', 'Enter Amount', 'Please enter a valid positive amount.', 'warning'); return; }
-  if (amount !== Math.abs(amount)) { showModal('❌', 'Invalid Amount', 'Amount cannot be negative!', 'error'); return; }
+  if (!amount || isNaN(amount) || amount <= 0) { showModal('⚠️', 'Enter Amount', 'Please enter a valid positive amount.', 'warning'); _withdrawProcessing = false; return; }
+  if (amount !== Math.abs(amount)) { showModal('❌', 'Invalid Amount', 'Amount cannot be negative!', 'error'); _withdrawProcessing = false; return; }
   const dynamicMinWithdraw = window._appSettings?.minWithdraw || MIN_WITHDRAW;
   if (amount < dynamicMinWithdraw) { 
     showModal('⚠️', `Minimum ₹${dynamicMinWithdraw}`, `Minimum withdrawal is ₹${dynamicMinWithdraw}. Please select a valid amount.`, 'warning'); 
@@ -6069,6 +6180,10 @@ async function checkAndUpdateStreak() {
 
 // User taps a streak day to claim
 async function claimStreakDay() {
+  // Same rate-limit every other coin-crediting action already has — this
+  // function was previously missing it entirely, which (combined with the
+  // gap below) made it double-claimable via a fast double-tap.
+  if (!checkRateLimit('claimStreakDay', 3000)) return;
   if (!currentUser) {
     showModal('📵', 'Connection Issue', 'Could not connect to the server. Please check your internet and try again.', 'error');
     return;
@@ -6094,9 +6209,27 @@ async function claimStreakDay() {
     showToast('⏳ Aaj pehle app refresh karo!'); return;
   }
 
+  // Atomic server-side guard, same family as the referral/milestone guards
+  // elsewhere in this file. Without this, the check above only ever reads
+  // the LOCAL userData.streak.claimedToday flag — a fast double-tap (or,
+  // worse, an admin-configured free-claim day with no ad delay at all)
+  // could fire this function twice before either call's Firebase write
+  // lands, and both would credit coins. This transaction makes only the
+  // FIRST caller win; rolled back below if the ad turns out to fail/be
+  // flagged, so a genuine failed attempt can still retry today.
+  const streakGuard = await db.ref('users/' + currentUser + '/streak/claimedToday').transaction(existing => {
+    if (existing === true) return; // abort — someone already has this slot
+    return true;
+  });
+  if (!streakGuard.committed) {
+    showToast('✅ Aaj ki streak already claim ho gayi!');
+    return;
+  }
+  const rollbackStreakGuard = () => { db.ref('users/' + currentUser + '/streak/claimedToday').set(false).catch(()=>{}); };
+
   const dayNum = Math.min((s.count || 0) + 1, 7);
   const adRequired = STREAK_AD_REQUIRED[dayNum] !== false;
-  const newCount = Math.min((s.count || 0) + 1, 7);
+  const newCount = dayNum;
   const coins = STREAK_COINS[newCount] || 3;
   let ymid = null;
   let streakElapsed = null;
@@ -6135,12 +6268,14 @@ async function claimStreakDay() {
     if (!adOk) {
       cancelPendingClaim(ymid);
       logAdAttempt('Streak Day ' + newCount, 'flagged', streakElapsed, 'sdk_error');
+      rollbackStreakGuard();
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your streak!', 'error');
       return;
     }
     if (watch.flagged || streakElapsed < AD_REQUIRED_MS) {
       cancelPendingClaim(ymid);
       logAdAttempt('Streak Day ' + newCount, 'flagged', streakElapsed, watch.reason || 'quick_resolve');
+      rollbackStreakGuard();
       showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
       return;
     }
@@ -6161,10 +6296,8 @@ async function claimStreakDay() {
   await db.ref('users/' + currentUser + '/streak').set(newStreak);
 
   // Postback confirmed (or it was a free-claim day) — safe to credit
-  window._trustedCoinUpdate = true;
   const streakCoinResult = await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
   userData.coins = streakCoinResult.committed ? streakCoinResult.snapshot.val() : ((userData.coins||0) + coins);
-  window._trustedCoinUpdate = false;
 
   updateUI();
   renderStreak(newStreak);
@@ -6648,5 +6781,9 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
+
+<!-- index.html mein add karo body ke end mein -->
+<script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+<script>eruda.init();</script>
 </body>
 </html>
