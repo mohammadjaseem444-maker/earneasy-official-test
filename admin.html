@@ -624,11 +624,19 @@ table { min-width:600px; }
       </div>
 
       <div class="quick-stats">
+        <div class="quick-stat" style="cursor:pointer" onclick="openOnlineUsersDrilldown()">
+          <div class="quick-stat-val" id="stat-online" style="color:#22c55e;">0</div>
+          <div class="quick-stat-lbl">🟢 Online Now</div>
+        </div>
+        <div class="quick-stat">
+          <div class="quick-stat-val" id="stat-active-today" style="color:#22c55e;">0</div>
+          <div class="quick-stat-lbl">📅 Daily Active Users</div>
+        </div>
         <div class="quick-stat">
           <div class="quick-stat-val" id="stat-banned">0</div>
           <div class="quick-stat-lbl">🚫 Banned Users</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat" style="cursor:pointer" onclick="openReferralsDrilldown()">
           <div class="quick-stat-val" id="stat-refers">0</div>
           <div class="quick-stat-lbl">🔗 Total Referrals</div>
         </div>
@@ -637,12 +645,20 @@ table { min-width:600px; }
           <div class="quick-stat-lbl">📺 Ads Today</div>
         </div>
         <div class="quick-stat">
-          <div class="quick-stat-val" id="stat-games-today">0</div>
-          <div class="quick-stat-lbl">🎮 Games Today</div>
+          <div class="quick-stat-val" id="stat-math-today">0</div>
+          <div class="quick-stat-lbl">🔢 Math Today</div>
         </div>
         <div class="quick-stat">
+          <div class="quick-stat-val" id="stat-captcha-today">0</div>
+          <div class="quick-stat-lbl">🔤 Captcha Today</div>
+        </div>
+        <div class="quick-stat">
+          <div class="quick-stat-val" id="stat-color-today">0</div>
+          <div class="quick-stat-lbl">🎨 Color Today</div>
+        </div>
+        <div class="quick-stat" style="cursor:pointer" onclick="openTasksDrilldown()">
           <div class="quick-stat-val" id="stat-tasks">0</div>
-          <div class="quick-stat-lbl">✅ Active Tasks</div>
+          <div class="quick-stat-lbl">✅ Task Completions</div>
         </div>
         <div class="quick-stat" onclick="showPage('feedbacks')" style="cursor:pointer;">
           <div class="quick-stat-val" id="stat-feedbacks" style="color:#3b82f6;">0</div>
@@ -1424,6 +1440,21 @@ table { min-width:600px; }
 </div>
 
 <!-- USER DETAIL MODAL -->
+<div class="modal-overlay" id="drilldownModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button id="drilldownBackBtn" onclick="drilldownGoBack()" style="display:none;background:none;border:none;color:var(--text2);font-size:1.1rem;cursor:pointer;padding:4px;"><i class="fas fa-arrow-left"></i></button>
+        <h2 id="drilldownTitle">Details</h2>
+      </div>
+      <button class="modal-close" onclick="closeModal('drilldownModal')"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div id="drilldownBody" style="max-height:60vh;overflow-y:auto;"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="userDetailModal">
   <div class="modal-box">
     <div class="modal-head">
@@ -2043,17 +2074,19 @@ document.getElementById('pwInput').addEventListener('keypress', e => { if(e.key=
 // ============================================================
 function setupAdminRealtimeListeners() {
   if(!db) return;
+
   db.ref('users').on('value', snap => {
     if(!snap || !snap.exists()) return;
+    const users = snap.val();
     let pending = 0;
-    Object.values(snap.val()).forEach(u => {
+    Object.values(users).forEach(u => {
       (u.withdrawHistory||[]).forEach(w => { if(w.status==='pending') pending++; });
     });
     const badge = document.getElementById('pendingBadge');
     if(badge) badge.textContent = pending;
     // Update allUsers and re-render if users page is visible
     if(typeof allUsers !== 'undefined') {
-      allUsers = Object.entries(snap.val()).map(([uid,u])=>({...u, uid}))
+      allUsers = Object.entries(users).map(([uid,u])=>({...u, uid}))
         .sort((a,b) => (b.joinedAt||0) - (a.joinedAt||0));
       // Re-render only if users page is currently active
       const usersPage = document.getElementById('page-users');
@@ -2061,7 +2094,204 @@ function setupAdminRealtimeListeners() {
         renderUsersPage();
       }
     }
+    // Live dashboard stats (Total Users, Daily Active Users, Banned,
+    // Referrals, Math/Captcha/Color Today, Task Completions) — debounced,
+    // see scheduleDashboardStatsCompute() above computeAndRenderDashboardStats().
+    scheduleDashboardStatsCompute(users);
   });
+
+  // Online Users — Firebase's presence node (written by the app itself in
+  // index.html's enterApp(), removed via onDisconnect() or explicit
+  // logout). Small node, cheap to recount on every change — no debounce
+  // needed, updates instantly. A user counts as online if they have AT
+  // LEAST ONE live connection under presence/{uid}/connections — using
+  // multiple named connections (not one flat value) means a user with
+  // two sessions open (e.g. phone + web) correctly stays "online" if
+  // only one of them closes.
+  db.ref('presence').on('value', snap => {
+    const data = (snap && snap.exists()) ? snap.val() : {};
+    window._presenceCache = data;
+    const onlineUids = Object.keys(data).filter(uid => data[uid] && data[uid].connections && Object.keys(data[uid].connections).length > 0);
+    const el = document.getElementById('stat-online');
+    if(el) el.textContent = onlineUids.length;
+  });
+
+  // Wiped Accounts — was a one-time fbGet() re-run only on manual
+  // Refresh/reload before; now live.
+  db.ref('wipedAccounts').on('value', snap => {
+    const el = document.getElementById('stat-wiped');
+    if(el) el.textContent = (snap && snap.exists()) ? Object.keys(snap.val()).length : 0;
+  });
+
+  // App settings cache. window._appSettings was referenced by the
+  // dashboard's math/captcha/color-limit lookups before this fix but was
+  // NEVER actually populated anywhere in admin.html — index.html has its
+  // own separate copy in its own separate page, the two don't share JS
+  // state — so those lookups always silently used the hardcoded default
+  // of 20 regardless of what was really configured. This also
+  // re-triggers an immediate stats recompute once settings are known, so
+  // the dashboard doesn't sit on default-limit numbers until the next
+  // unrelated user-data change happens to come in.
+  db.ref('appSettings').on('value', snap => {
+    window._appSettings = (snap && snap.exists()) ? snap.val() : {};
+    if (allUsers && allUsers.length) {
+      const usersObj = {};
+      allUsers.forEach(u => { usersObj[u.uid] = u; });
+      computeAndRenderDashboardStats(usersObj);
+    }
+  });
+
+  // Task definitions cache — needed by the Task Completions drill-down
+  // to show each task's title, not just its raw Firebase key.
+  db.ref('tasks').on('value', snap => {
+    window._allTasksCache = (snap && snap.exists()) ? snap.val() : {};
+  });
+}
+
+// ============================================================
+// DASHBOARD DRILL-DOWNS (Total Referrals, Task Completions, Online Now)
+// Reuses the generic #drilldownModal — a simple list view, with a back
+// button for the two-level ones (referrer -> their referred users, task
+// -> its completed-by users).
+// ============================================================
+let _drilldownStack = [];
+
+function drilldownRender(title, bodyHTML) {
+  document.getElementById('drilldownTitle').textContent = title;
+  document.getElementById('drilldownBody').innerHTML = bodyHTML;
+  document.getElementById('drilldownBackBtn').style.display = _drilldownStack.length ? 'inline-block' : 'none';
+  openModal('drilldownModal');
+}
+
+function drilldownGoBack() {
+  const prev = _drilldownStack.pop();
+  if (prev) prev(); else closeModal('drilldownModal');
+}
+
+const _dEmpty = msg => `<div style="color:var(--text3);padding:24px 0;text-align:center;">${msg}</div>`;
+
+// ---- Total Referrals ----
+function openReferralsDrilldown() {
+  _drilldownStack = [];
+  renderReferralsList();
+}
+
+function renderReferralsList() {
+  // Built from referCodeUsed (permanent — set once on the referred
+  // user's own record at signup) rather than referralRewards. That node
+  // is a TRANSIENT queue: index.html's enterApp() collects it into the
+  // referrer's referCount and WIPES it (sets it to null) the very next
+  // time the referrer opens the app — so it would show almost nothing
+  // for any referrer who opens the app regularly. referCodeUsed never
+  // gets cleared, so it's the only reliable permanent record of who
+  // referred whom — same data this codebase's existing per-user
+  // "view referrals" button (openReferralTree) already relies on, so
+  // this stays consistent with it. Built entirely from the already-
+  // loaded allUsers — no extra Firebase read needed.
+  const byReferrer = {};
+  allUsers.forEach(u => {
+    if (u.referCodeUsed) {
+      const referrer = allUsers.find(r => r.referCode === u.referCodeUsed);
+      if (referrer) (byReferrer[referrer.uid] = byReferrer[referrer.uid] || []).push(u);
+    }
+  });
+  const referrerIds = Object.keys(byReferrer);
+  if (!referrerIds.length) {
+    drilldownRender('Total Referrals', _dEmpty('Koi referral nahi hua abhi tak'));
+    return;
+  }
+  const rows = referrerIds.map(rid => {
+    const referrer = allUsers.find(u => u.uid === rid);
+    return { rid, name: referrer ? (referrer.name || 'Unknown') : 'Unknown', count: byReferrer[rid].length };
+  }).sort((a,b) => b.count - a.count);
+
+  const html = rows.map(r => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="openReferrerDetail('${r.rid}')">
+      <div style="font-weight:700;color:var(--text);">${r.name}</div>
+      <div style="color:var(--green);font-weight:800;">${r.count} <i class="fas fa-chevron-right" style="font-size:0.7rem;opacity:0.5;margin-left:4px;"></i></div>
+    </div>`).join('');
+  drilldownRender(`Total Referrals (${referrerIds.length} referrers)`, html);
+}
+
+function openReferrerDetail(referrerId) {
+  _drilldownStack.push(renderReferralsList);
+  renderReferrerDetail(referrerId);
+}
+
+function renderReferrerDetail(referrerId) {
+  const referrer = allUsers.find(u => u.uid === referrerId);
+  const referrerName = referrer ? (referrer.name || 'Unknown') : 'Unknown';
+  const referred = (referrer && referrer.referCode) ? allUsers.filter(u => u.referCodeUsed === referrer.referCode) : [];
+  const html = referred.length ? referred.map(u => `
+    <div style="padding:10px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="closeModal('drilldownModal');openUserDetail('${u.uid}')">
+      <div style="font-weight:700;color:var(--text);">${u.name||'Unknown'}</div>
+      <div style="color:var(--text3);font-size:0.82rem;">${u.email||'-'}</div>
+    </div>`).join('') : _dEmpty('Koi data nahi mila');
+  drilldownRender(referrerName + "'s Referrals", html);
+}
+
+// ---- Task Completions ----
+function openTasksDrilldown() {
+  _drilldownStack = [];
+  renderTasksList();
+}
+
+function renderTasksList() {
+  const byTask = window._taskCompletionsByTask || {};
+  const taskIds = Object.keys(byTask);
+  const tasksMeta = window._allTasksCache || {};
+  if (!taskIds.length) {
+    drilldownRender('Task Completions', _dEmpty('Abhi tak koi task complete nahi hua'));
+    return;
+  }
+  const rows = taskIds.map(tid => ({
+    tid,
+    title: (tasksMeta[tid] && tasksMeta[tid].title) || '(deleted task)',
+    count: byTask[tid]
+  })).sort((a,b) => b.count - a.count);
+  const html = rows.map(r => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="openTaskDetail('${r.tid}')">
+      <div style="font-weight:700;color:var(--text);">${r.title}</div>
+      <div style="color:var(--green);font-weight:800;">${r.count} <i class="fas fa-chevron-right" style="font-size:0.7rem;opacity:0.5;margin-left:4px;"></i></div>
+    </div>`).join('');
+  drilldownRender(`Task Completions (${taskIds.length} tasks)`, html);
+}
+
+function openTaskDetail(taskId) {
+  const tasksMeta = window._allTasksCache || {};
+  const taskTitle = (tasksMeta[taskId] && tasksMeta[taskId].title) || '(deleted task)';
+  _drilldownStack.push(renderTasksList);
+  const completedBy = allUsers.filter(u => u.completedTasks && u.completedTasks[taskId]);
+  const html = completedBy.length ? completedBy
+    .sort((a,b) => (b.completedTasks[taskId]||0) - (a.completedTasks[taskId]||0))
+    .map(u => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="closeModal('drilldownModal');openUserDetail('${u.uid}')">
+        <div style="font-weight:700;color:var(--text);">${u.name||'Unknown'}</div>
+        <div style="color:var(--text3);font-size:0.8rem;">${new Date(u.completedTasks[taskId]).toLocaleDateString('en-IN')}</div>
+      </div>`).join('') : _dEmpty('Koi data nahi mila');
+  drilldownRender(taskTitle, html);
+}
+
+// ---- Online Now ----
+function openOnlineUsersDrilldown() {
+  _drilldownStack = [];
+  const presence = window._presenceCache || {};
+  const uids = Object.keys(presence).filter(uid => presence[uid] && presence[uid].connections && Object.keys(presence[uid].connections).length > 0);
+  if (!uids.length) {
+    drilldownRender('Online Now', _dEmpty('Abhi koi bhi online nahi hai'));
+    return;
+  }
+  const html = uids.map(uid => {
+    const p = presence[uid] || {};
+    const connTimes = Object.values(p.connections || {});
+    const earliestConn = connTimes.length ? Math.min(...connTimes) : null;
+    const since = earliestConn ? new Date(earliestConn).toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'}) : '-';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="closeModal('drilldownModal');openUserDetail('${uid}')">
+      <div style="font-weight:700;color:var(--text);"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:8px;"></span>${p.name||'User'}</div>
+      <div style="color:var(--text3);font-size:0.8rem;">since ${since}</div>
+    </div>`;
+  }).join('');
+  drilldownRender(`Online Now (${uids.length})`, html);
 }
 
 function showPage(name) {
@@ -2213,20 +2443,23 @@ async function deleteBACode(code) {
   loadBAPromoCodes();
 }
 
-async function loadDashboard() {
-  if (!db) { showToast('Firebase not connected!','danger'); return; }
-  const snap = await fbGet('users');
-  if (!snap || !snap.exists()) {
-    // Show zeros
-    ['stat-users','stat-coins','stat-banned','stat-refers','stat-tasks'].forEach(id => {
-      const el = document.getElementById(id); if(el) el.textContent = '0';
-    });
-    document.getElementById('stat-withdraw').textContent = '₹0';
-    document.getElementById('stat-pending').textContent = '0';
-    document.getElementById('recentUsersTbody').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">No users yet</td></tr>';
-    return;
-  }
-  const users = snap.val();
+// ============================================================
+// DASHBOARD STATS — shared by the initial/manual load (loadDashboard)
+// and the live "users" realtime listener (setupAdminRealtimeListeners),
+// so both paths compute stats identically and can never drift apart.
+// ============================================================
+let _dashboardDebounceTimer = null;
+function scheduleDashboardStatsCompute(users) {
+  // The realtime users listener can fire in rapid bursts (many users
+  // claiming ads/games at once) — recomputing on every single change
+  // would be wasteful. Coalesce bursts into at most one recompute every
+  // 2s.
+  if (_dashboardDebounceTimer) clearTimeout(_dashboardDebounceTimer);
+  _dashboardDebounceTimer = setTimeout(() => computeAndRenderDashboardStats(users), 2000);
+}
+
+function computeAndRenderDashboardStats(users) {
+  if (!users) return;
   const arr = Object.entries(users).map(([uid,u]) => ({uid,...u}));
   allUsers = arr;
 
@@ -2236,48 +2469,122 @@ async function loadDashboard() {
   // date differ, miscategorizing which day a user's activity fell under.
   const istNow = new Date(Date.now() + 5.5 * 60 * 60000);
   const today = istNow.toISOString().split('T')[0];
-  let totalCoins = 0, totalWithdrawn = 0, pendingCount = 0, bannedCount = 0, totalRefers = 0, todayUsers = 0;
 
-  let totalAdsToday = 0, totalGamesToday = 0;
+  // window._appSettings is populated by the 'appSettings' realtime
+  // listener in setupAdminRealtimeListeners() — previously this global
+  // was referenced here but NEVER actually set anywhere in admin.html
+  // (index.html has its own separate copy in its own separate page —
+  // the two pages don't share JS state), so these limits always
+  // silently fell back to the hardcoded default of 20, ignoring
+  // whatever was actually configured in Settings.
+  const mathLimit = (window._appSettings && window._appSettings.mathLimit) || 20;
+  const captchaLimit = (window._appSettings && window._appSettings.captchaLimit) || 20;
+  const colorLimit = (window._appSettings && window._appSettings.colorLimit) || 20;
+
+  let totalCoins = 0, totalWithdrawn = 0, pendingCount = 0, bannedCount = 0, totalRefers = 0;
+  let newUsersToday = 0, activeToday = 0;
+  let totalAdsToday = 0, mathToday = 0, captchaToday = 0, colorToday = 0;
+  let taskCompletionsTotal = 0;
+  const taskCompletionsByTask = {};
+
   arr.forEach(u => {
     totalCoins += u.coins||0;
     totalWithdrawn += u.totalWithdrawn||0;
     if(u.banned) bannedCount++;
     totalRefers += u.referCount||0;
-    // Count active today: lastReset, adsDate, OR joined today
-    const joinedToday = u.joinedAt ? new Date(u.joinedAt).toISOString().split('T')[0] === today : false;
-    if(u.lastReset===today || u.adsDate===today || joinedToday) {
-      todayUsers++;
+
+    // IST-consistent "joined today" check — previously compared a
+    // raw-UTC joinedAt date string against the IST-adjusted `today`
+    // above, which could misclassify signups made in the ~5.5hr nightly
+    // window where the UTC and IST dates disagree (same class of
+    // mismatch already fixed for `today` itself, just not carried
+    // through to this specific comparison before).
+    const joinedToday = u.joinedAt ? new Date(u.joinedAt + 5.5*60*60000).toISOString().split('T')[0] === today : false;
+    if (joinedToday) newUsersToday++;
+
+    const activeTodayFlag = u.lastReset===today || u.adsDate===today || joinedToday;
+    if (activeTodayFlag) {
+      activeToday++;
       totalAdsToday += u.adsWatched||0;
-      // Count games played today
-      const mathPlayed = (window._appSettings?.mathLimit||20) - (u.mathLeft||0);
-      const captchaPlayed = (window._appSettings?.captchaLimit||20) - (u.captchaLeft||0);
-      const colorPlayed = (window._appSettings?.colorLimit||20) - (u.colorLeft||0);
-      totalGamesToday += Math.max(0,mathPlayed) + Math.max(0,captchaPlayed) + Math.max(0,colorPlayed);
+      // "?? limit" (not the old "|| 0") for a user who hasn't touched a
+      // given game today at all — their mathLeft/captchaLeft/colorLeft
+      // field may genuinely not exist yet (e.g. a brand-new signup who
+      // hasn't opened any game). Treating a MISSING field as "0
+      // remaining" meant played = limit - 0 = the FULL limit — i.e.
+      // every such user was counted as having already played the
+      // maximum, inflating these numbers. Missing should mean "hasn't
+      // played" (0 played, full amount still remaining), not "already
+      // played everything".
+      mathToday += Math.max(0, mathLimit - (u.mathLeft ?? mathLimit));
+      captchaToday += Math.max(0, captchaLimit - (u.captchaLeft ?? captchaLimit));
+      colorToday += Math.max(0, colorLimit - (u.colorLeft ?? colorLimit));
     }
+
     (u.withdrawHistory||[]).forEach(w => { if(w.status==='pending') pendingCount++; });
+
+    if (u.completedTasks) {
+      Object.keys(u.completedTasks).forEach(taskId => {
+        taskCompletionsByTask[taskId] = (taskCompletionsByTask[taskId]||0) + 1;
+        taskCompletionsTotal++;
+      });
+    }
   });
 
-  document.getElementById('stat-users').textContent = arr.length;
-  document.getElementById('stat-users-today').textContent = `+${todayUsers} today`;
-  document.getElementById('stat-coins').textContent = totalCoins.toLocaleString();
-  document.getElementById('stat-withdraw').textContent = '₹'+totalWithdrawn;
-  document.getElementById('stat-pending').textContent = pendingCount;
-  document.getElementById('stat-banned').textContent = bannedCount;
-  document.getElementById('stat-refers').textContent = totalRefers;
-  // Revenue estimate
+  const setText = (id, val) => { const el = document.getElementById(id); if(el) el.textContent = val; };
+  // Total Users — unique Firebase accounts only. A returning user signs
+  // back into the SAME account (deterministic email for Telegram, Google
+  // identity for Google login — verified in both login flows), so this
+  // number only grows on a genuinely new signup, never on a repeat
+  // visit. The "+X" line below it now says so explicitly, instead of the
+  // old "+X today" which actually meant "active today" (new OR
+  // returning) — easy to misread as if it were double-counting Total
+  // Users itself, when it never was. That broader number now has its
+  // own separate "Daily Active Users" card.
+  setText('stat-users', arr.length);
+  setText('stat-users-today', `+${newUsersToday} new today`);
+  setText('stat-active-today', activeToday);
+  setText('stat-coins', totalCoins.toLocaleString());
+  setText('stat-withdraw', '₹'+totalWithdrawn);
+  setText('stat-pending', pendingCount);
+  setText('stat-banned', bannedCount);
+  setText('stat-refers', totalRefers);
+  setText('stat-ads-today', totalAdsToday.toLocaleString());
+  setText('stat-math-today', mathToday.toLocaleString());
+  setText('stat-captcha-today', captchaToday.toLocaleString());
+  setText('stat-color-today', colorToday.toLocaleString());
+  setText('stat-tasks', taskCompletionsTotal.toLocaleString());
+  setText('pendingBadge', pendingCount);
+  window._taskCompletionsByTask = taskCompletionsByTask;
+
+  // Revenue estimate (unchanged math, still driven by today's ad count)
   const CPM = 0.80; // $0.80 per 1000 ads (conservative India estimate)
   const adsRev = (totalAdsToday / 1000) * CPM;
   const coinsCost = (totalAdsToday * 3 * 0.01); // 3 coins per ad, ₹0.01 per coin
   const profit = adsRev - (coinsCost / 85); // convert ₹ to $
-  const revAds = document.getElementById('rev-ads'); if(revAds) revAds.textContent = '$' + adsRev.toFixed(3);
-  const revCost = document.getElementById('rev-cost'); if(revCost) revCost.textContent = '₹' + coinsCost.toFixed(2);
-  const revProfit = document.getElementById('rev-profit'); if(revProfit) { revProfit.textContent = '$' + profit.toFixed(3); revProfit.style.color = profit >= 0 ? '#34d399' : '#f87171'; }
-  const _adsEl = document.getElementById('stat-ads-today');
-  if(_adsEl) _adsEl.textContent = totalAdsToday.toLocaleString();
-  const _gamesEl = document.getElementById('stat-games-today');
-  if(_gamesEl) _gamesEl.textContent = totalGamesToday.toLocaleString();
-  // Load feedback unread count
+  setText('rev-ads', '$' + adsRev.toFixed(3));
+  setText('rev-cost', '₹' + coinsCost.toFixed(2));
+  const revProfit = document.getElementById('rev-profit');
+  if(revProfit) { revProfit.textContent = '$' + profit.toFixed(3); revProfit.style.color = profit >= 0 ? '#34d399' : '#f87171'; }
+  return arr; // handed back to loadDashboard() so it isn't rebuilt a second time
+}
+
+async function loadDashboard() {
+  if (!db) { showToast('Firebase not connected!','danger'); return; }
+  const snap = await fbGet('users');
+  if (!snap || !snap.exists()) {
+    ['stat-users','stat-coins','stat-banned','stat-refers','stat-tasks','stat-active-today','stat-ads-today','stat-math-today','stat-captcha-today','stat-color-today'].forEach(id => {
+      const el = document.getElementById(id); if(el) el.textContent = '0';
+    });
+    document.getElementById('stat-withdraw').textContent = '₹0';
+    document.getElementById('stat-pending').textContent = '0';
+    document.getElementById('recentUsersTbody').innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3)">No users yet</td></tr>';
+    return;
+  }
+  const users = snap.val();
+  const arr = computeAndRenderDashboardStats(users); // immediate — this IS the deliberate load/refresh, no debounce
+
+  // Load feedback unread count (kept exactly as before — not converted
+  // to a live listener, per confirmation this one already works fine)
   fbGet('userFeedback').then(fbSnap => {
     if(fbSnap && fbSnap.exists()) {
       const unread = Object.values(fbSnap.val()).filter(f => !f.read).length;
@@ -2287,16 +2594,6 @@ async function loadDashboard() {
       if(badge) { if(unread>0){badge.textContent=unread;badge.style.display='inline-flex';}else badge.style.display='none'; }
     }
   }).catch(()=>{});
-  // Wiped accounts count
-  fbGet('wipedAccounts').then(wSnap => {
-    const el = document.getElementById('stat-wiped');
-    if(el) el.textContent = wSnap && wSnap.exists() ? Object.keys(wSnap.val()).length : 0;
-  }).catch(()=>{});
-  document.getElementById('pendingBadge').textContent = pendingCount;
-
-  // Tasks count
-  const tSnap = await fbGet('tasks');
-  document.getElementById('stat-tasks').textContent = (tSnap && tSnap.exists()) ? Object.keys(tSnap.val()).length : 0;
 
   // Fraud detection alerts
   const fraudAlerts = [];

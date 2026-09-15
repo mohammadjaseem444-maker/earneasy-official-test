@@ -110,6 +110,10 @@ ONE copy, right here, and the second location just points back to it.
         }
       }
     },
+    "presence": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$uid": { ".write": "auth != null && auth.uid == $uid" }
+    },
     "debugLog": { ".read": true, ".write": true },
     "pendingClaims": {
       ".read": true,
@@ -196,6 +200,17 @@ ONE copy, right here, and the second location just points back to it.
 *** "adminConfig/ambassadorPassword" fields are no longer written or read
 *** by the app — safe to leave any old values there alone (they're
 *** simply unused now) or delete them, either is fine.
+
+*** IMPORTANT (admin dashboard live-stats build): one more rules change
+*** needed for the new admin dashboard features — a new "presence" node,
+*** which powers the live "Online Now" count. The app (index.html)
+*** writes its own uid under here while active (one child key per open
+*** connection/tab, Firebase's documented multi-connection-safe pattern)
+*** and removes it via onDisconnect()/on logout; admin reads the whole
+*** node to count/list who's online.
+*** (The Total Referrals drill-down needed no rules change — it's built
+*** entirely from each user's own referCode/referCodeUsed fields, which
+*** admin could already read as part of the normal "users" node.)
 -->
 <html lang="en">
 <head>
@@ -3534,6 +3549,36 @@ async function enterApp() {
       }
     });
     window._earnEasyListeners.push(_wdRef);
+
+    // Presence (powers admin dashboard's live "Online Users" count).
+    // Firebase's standard pattern: .info/connected fires whenever THIS
+    // client's socket connects/reconnects. onDisconnect().remove() is
+    // registered with the SERVER itself, so it still fires on an abrupt
+    // loss (app killed, network cut) where the client never gets a
+    // chance to run its own cleanup — that's what makes "online" status
+    // reliable instead of just trusting the client to say goodbye.
+    // Re-registering onDisconnect() every time .info/connected becomes
+    // true (not just once) is required — a previous onDisconnect hook
+    // does not survive a reconnect, so skipping this would leave
+    // presence stuck "online" forever after any reconnect.
+    // Each connection gets its OWN auto-generated child key under
+    // presence/{uid}/connections, rather than one flat value — this is
+    // Firebase's documented multi-connection-safe pattern. With a single
+    // flat value, a user with two sessions open at once (e.g. phone +
+    // web) would show "offline" the moment EITHER ONE closed, since that
+    // session's onDisconnect would wipe the whole entry even while the
+    // other session is still legitimately connected.
+    const _presenceConnRef = db.ref('.info/connected');
+    _presenceConnRef.on('value', snap => {
+      if (snap.val() === true && currentUser) {
+        const myConnRef = db.ref('presence/' + currentUser + '/connections').push();
+        myConnRef.onDisconnect().remove().then(() => {
+          myConnRef.set(firebase.database.ServerValue.TIMESTAMP);
+          db.ref('presence/' + currentUser + '/name').set(userData.name || 'User').catch(()=>{});
+        }).catch(()=>{});
+      }
+    });
+    window._earnEasyListeners.push(_presenceConnRef);
 } // closes if(firebaseReady) block
 } // END enterApp
 
@@ -6377,6 +6422,7 @@ function confirmLogout() {
   closeMenu();
   showModal('🚪', 'Logout?', 'Are you sure you want to logout? Your progress is saved safely. You can login again anytime.', 'warning', () => {
     // Logout - clear local data and sign out
+    const _loggingOutUid = currentUser; // captured before currentUser is nulled below
     localStorage.removeItem('earneasy_uid');
     localStorage.removeItem('earneasy_user');
     currentUser = null;
@@ -6387,6 +6433,13 @@ function confirmLogout() {
       window._earnEasyListeners.forEach(ref => { try { ref.off(); } catch(e){} });
       window._earnEasyListeners = [];
     }
+    // Explicitly clear presence now — .off() above only stops listening,
+    // it doesn't remove data, and the onDisconnect() hook only fires once
+    // the actual socket closes, which on an intentional in-app logout
+    // (no page reload) can lag behind this moment. Removing it directly
+    // here means the admin dashboard's Online Users count updates
+    // immediately instead of waiting on the connection to time out.
+    if(db && _loggingOutUid) { db.ref('presence/' + _loggingOutUid).remove().catch(()=>{}); }
     if(firebase.auth().currentUser) {
       firebase.auth().signOut().then(() => {
         document.getElementById('app').classList.remove('active');
