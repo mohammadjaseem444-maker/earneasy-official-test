@@ -727,6 +727,14 @@ table { min-width:600px; }
             <i class="fas fa-search"></i>
             <input type="text" placeholder="Search by name..." id="userSearchInput" oninput="filterUsers()"/>
           </div>
+          <select id="userSortSelect" onchange="filterUsers()" style="background:var(--card2);color:var(--text);border:1px solid var(--border2);border-radius:8px;padding:8px 10px;font-size:0.82rem;font-family:inherit;">
+            <option value="joined_desc">Newest First</option>
+            <option value="coins_desc">Coins: High to Low</option>
+            <option value="coins_asc">Coins: Low to High</option>
+            <option value="name_asc">Name: A-Z</option>
+            <option value="refers_desc">Referrals: High to Low</option>
+            <option value="withdrawn_desc">Withdrawn: High to Low</option>
+          </select>
         </div>
         <!-- Bulk Actions Bar -->
         <div id="bulkActionsBar" style="display:none;align-items:center;gap:8px;padding:8px 12px;background:#1a2a1a;border:1px solid #16a34a40;border-radius:10px;margin-bottom:8px;flex-wrap:wrap;">
@@ -1676,8 +1684,8 @@ table { min-width:600px; }
 <!-- TOAST -->
 
     <!-- ===== OFFERWALL SETTINGS PAGE ===== -->
-    <div class="page" id="page-offerwalls" style="padding-top:0;">
-      <div class="page-header" style="position:sticky;top:0;z-index:10;background:var(--bg);padding:16px 0 12px;">
+    <div class="page" id="page-offerwalls">
+      <div class="page-header">
         <div>
           <div class="page-title">Offerwall <span>Settings</span></div>
           <div class="page-sub">Control offerwall access for users</div>
@@ -2712,7 +2720,18 @@ function changePageSize(size) { usersPageSize = parseInt(size); currentPageUsers
 
 function renderUsersPage() {
   const q = (document.getElementById('userSearchInput')||{}).value?.toLowerCase()||'';
-  const filtered = allUsers.filter(u => (u.name||'').toLowerCase().includes(q));
+  const sortBy = (document.getElementById('userSortSelect')||{}).value || 'joined_desc';
+  let filtered = allUsers.filter(u => (u.name||'').toLowerCase().includes(q));
+  // Default "Newest First" needs no re-sort — allUsers already arrives in
+  // that order (see setupAdminRealtimeListeners' users listener), so the
+  // normal view stays exactly as it always has. Every other option is a
+  // fresh sort of the (already name-filtered) list, for fraud-spotting —
+  // e.g. sorting by coins surfaces suspiciously high balances fast.
+  if (sortBy === 'coins_desc') filtered = [...filtered].sort((a,b) => (b.coins||0)-(a.coins||0));
+  else if (sortBy === 'coins_asc') filtered = [...filtered].sort((a,b) => (a.coins||0)-(b.coins||0));
+  else if (sortBy === 'name_asc') filtered = [...filtered].sort((a,b) => (a.name||'').localeCompare(b.name||''));
+  else if (sortBy === 'refers_desc') filtered = [...filtered].sort((a,b) => (b.referCount||0)-(a.referCount||0));
+  else if (sortBy === 'withdrawn_desc') filtered = [...filtered].sort((a,b) => (b.totalWithdrawn||0)-(a.totalWithdrawn||0));
   document.getElementById('usersCount').textContent = `${filtered.length} total users`;
   const total = Math.ceil(filtered.length/USERS_PER_PAGE)||1;
   const start = (currentPageUsers-1)*USERS_PER_PAGE;
@@ -2753,52 +2772,6 @@ function renderUsersPage() {
 }
 
 function goUsersPage(n) { currentPageUsers=n; renderUsersPage(); }
-
-function applyUserFilters() {
-  const status = document.getElementById('userFilterStatus')?.value || 'all';
-  const sort = document.getElementById('userSortBy')?.value || 'joined';
-  const q = (document.getElementById('userSearch')?.value || '').toLowerCase();
-  
-  let filtered = [...allUsers];
-  // Status filter
-  if(status === 'banned') filtered = filtered.filter(u => u.banned);
-  else if(status === 'suspended') filtered = filtered.filter(u => u.suspended);
-  else if(status === 'active') filtered = filtered.filter(u => !u.banned && !u.suspended);
-  // Search
-  if(q) filtered = filtered.filter(u => (u.name||'').toLowerCase().includes(q) || (u.email||'').toLowerCase().includes(q));
-  // Sort
-  if(sort === 'coins_desc') filtered.sort((a,b) => (b.coins||0)-(a.coins||0));
-  else if(sort === 'coins_asc') filtered.sort((a,b) => (a.coins||0)-(b.coins||0));
-  else if(sort === 'withdrawn') filtered.sort((a,b) => (b.totalWithdrawn||0)-(a.totalWithdrawn||0));
-  else if(sort === 'refers') filtered.sort((a,b) => (b.referCount||0)-(a.referCount||0));
-  else filtered.sort((a,b) => (b.joinedAt||0)-(a.joinedAt||0));
-  
-  // Render filtered
-  const tbody = document.getElementById('usersTbody');
-  if(!tbody) return;
-  if(!filtered.length) { tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3)">No users match filter</td></tr>'; return; }
-  
-  tbody.innerHTML = filtered.slice(0, currentPageUsers * 10).map(u => `
-    <tr onclick="openUserDetail('${u.uid}')" style="cursor:pointer;">
-      <td><div class="user-cell">
-        <div class="user-mini-avatar">${(u.name||'?').charAt(0).toUpperCase()}</div>
-        <div>
-          <div class="td-main" style="display:flex;align-items:center;gap:6px;">
-            ${u.name||'Unknown'}
-            ${u.loginType==='telegram' ? '<span style="background:#2AABEE20;color:#2AABEE;border:1px solid #2AABEE40;border-radius:6px;padding:1px 6px;font-size:0.62rem;font-weight:700;">✈️ TG</span>' : '<span style="background:#16a34a20;color:#16a34a;border:1px solid #16a34a40;border-radius:6px;padding:1px 6px;font-size:0.62rem;font-weight:700;">🌐 WEB</span>'}
-          </div>
-          <div style="font-size:0.7rem;color:#3b82f6;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${u.loginType==='telegram' ? (u.phone||'—') : (u.email||'—')}">${u.loginType==='telegram' ? (u.phone||'—') : (u.email||'—')}</div>
-          ${u.deviceCode ? `<div style="font-size:0.65rem;color:#16a34a;font-family:monospace;font-weight:700;letter-spacing:1px;margin-top:2px;">🔢 ${u.deviceCode}</div>` : ''}
-        </div>
-      </div></td>
-      <td>${u.joinedAt ? new Date(u.joinedAt).toLocaleDateString('en-IN') : '-'}</td>
-      <td class="td-coins">${(u.coins||0).toLocaleString()}</td>
-      <td>₹${(u.totalWithdrawn||0).toFixed(2)}</td>
-      <td>${u.referCount||0}</td>
-      <td><span class="status-badge ${u.banned?'banned':u.suspended?'suspended':'active'}">${u.banned?'Banned':u.suspended?'Suspended':'Active'}</span></td>
-      <td><button class="btn-action" onclick="event.stopPropagation();openUserDetail('${u.uid}')"><i class="fas fa-eye"></i></button></td>
-    </tr>`).join('');
-}
 
 let _selectedUsers = new Set();
 
@@ -4677,6 +4650,40 @@ window.addEventListener('load', async () => {
         document.getElementById('lockScreen').style.display = 'flex';
       }
     });
+  }
+});
+
+// ============================================================
+// TAB BACKGROUNDING RECOVERY
+// ============================================================
+// Chrome (especially on Android) can silently drop a backgrounded tab's
+// Firebase WebSocket connection to save battery/memory — the page itself
+// stays alive (so it comes back to the SAME dashboard, no password
+// prompt), but the underlying connection's auth can end up stale, and
+// every read starts failing with "Permission denied" until a full page
+// reload. This proactively force-refreshes the auth token and reloads
+// the dashboard's data the moment the tab becomes visible again, instead
+// of waiting for the user to notice broken data and manually reload.
+let _lastHiddenAt = null;
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'hidden') {
+    _lastHiddenAt = Date.now();
+    return;
+  }
+  // Now visible again
+  if (_lastHiddenAt === null) return;
+  const hiddenForMs = Date.now() - _lastHiddenAt;
+  _lastHiddenAt = null;
+  if (hiddenForMs < 15000) return; // brief tab-switches aren't the scenario this guards against
+  if (sessionStorage.getItem('adminUnlocked') !== '1') return; // not logged in — nothing to recover
+  try {
+    const user = firebase.auth().currentUser;
+    if (user) {
+      await user.getIdToken(true); // force a fresh token — also tends to re-validate/wake the connection
+    }
+    if (typeof loadDashboard === 'function') loadDashboard();
+  } catch(e) {
+    console.warn('Visibility-recovery refresh failed:', e.message);
   }
 });
 </script>

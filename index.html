@@ -2793,7 +2793,21 @@ async function completeProfileSetup() {
   
   btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up...';
   
-  await setupNewUser(_pendingGoogleUser.uid, name, _pendingGoogleUser.email||'', _pendingGoogleUser.photoURL||'', refCode, 'google', '', '');
+  // Detect Telegram vs Google signup here — this was previously
+  // hardcoded to 'google' unconditionally, for BOTH signup paths (this
+  // same profile-setup screen is shared by telegramAutoLogin()'s
+  // new-user branch and handleGoogleResult()'s new-user branch). Every
+  // new Telegram user ended up stored with loginType:'google' — visibly
+  // wrong in the admin panel (shows a "WEB" badge on an account with a
+  // tg_...@earneasy.app email), and it also meant they got the wrong
+  // multi-account check (device-fingerprint, meant for Google users)
+  // instead of the Telegram-ID duplicate check, AND never got
+  // registered in telegramUsers/{telegramId} at all — silently
+  // disabling that duplicate-account protection for every Telegram
+  // signup, not just an edge case.
+  const _isTg = isTelegramEnv();
+  const _tgId = _isTg ? String(window.Telegram.WebApp.initDataUnsafe.user.id) : '';
+  await setupNewUser(_pendingGoogleUser.uid, name, _pendingGoogleUser.email||'', _pendingGoogleUser.photoURL||'', refCode, _isTg ? 'telegram' : 'google', '', _tgId);
   document.getElementById('profileSetupScreen').style.display = 'none';
   _pendingGoogleUser = null;
 }
@@ -4610,7 +4624,19 @@ function claimBonus() {
     showModal('📵', 'No Internet', 'Internet required!', 'error');
     return;
   }
-  
+
+  // Disable immediately — synchronously, before the Firebase read below
+  // even starts. showBonusAd() already disabled the button too, but only
+  // AFTER that async read resolves — leaving the button fully tappable
+  // for that round-trip's duration (worse on a slow connection). The
+  // rate-limit above already made a rapid double-tap financially
+  // harmless, but the button still visually invited a confusing second
+  // tap in that gap. Restored below on both "already claimed" branches;
+  // showBonusAd() itself takes over restyling it once it actually starts
+  // the ad flow.
+  const _bonusBtn = document.getElementById('bonusBtn');
+  if (_bonusBtn) { _bonusBtn.disabled = true; _bonusBtn.style.opacity = '0.7'; }
+
   const today = getToday();
   
   // FIREBASE-authoritative check - cannot be bypassed by refresh/restart
@@ -4620,14 +4646,17 @@ function claimBonus() {
       userData.bonusClaimed = true;
       userData.bonusDate = today;
       saveLocal();
+      if (_bonusBtn) { _bonusBtn.disabled = true; _bonusBtn.style.opacity = '1'; _bonusBtn.textContent = 'CLAIMED ✓'; _bonusBtn.className = 'btn-bonus claimed'; }
       showModal('⏳', 'Already Claimed!', 'You already claimed your daily bonus today. Come back tomorrow! 🌅', 'info');
       return;
     }
     showBonusAd();
   }).catch(() => {
     if (userData.bonusClaimed && userData.bonusDate === today) {
+      if (_bonusBtn) { _bonusBtn.disabled = true; _bonusBtn.style.opacity = '1'; _bonusBtn.textContent = 'CLAIMED ✓'; _bonusBtn.className = 'btn-bonus claimed'; }
       showModal('⏳', 'Already Claimed!', 'Come back tomorrow!', 'info');
     } else {
+      if (_bonusBtn) { _bonusBtn.disabled = false; _bonusBtn.style.opacity = '1'; } // read failed and it's NOT known-claimed — let them retry
       showBonusAd();
     }
   });
@@ -6272,6 +6301,15 @@ async function claimStreakDay() {
   }
   const rollbackStreakGuard = () => { db.ref('users/' + currentUser + '/streak/claimedToday').set(false).catch(()=>{}); };
 
+  // Visually disable the box THE MOMENT the guard above commits — not just
+  // relying on the guard itself (which already made a second tap harmless
+  // financially) but so the box doesn't sit there still looking tappable
+  // for the whole ~17s ad-watch window, inviting confused repeat taps.
+  // Restored (re-rendered claimable) on the failure paths below, since
+  // rollbackStreakGuard() means a genuine failed attempt can retry today.
+  const _claimableBox = document.querySelector('.streak-day-box.claimable');
+  if (_claimableBox) { _claimableBox.onclick = null; _claimableBox.style.opacity = '0.5'; _claimableBox.style.pointerEvents = 'none'; }
+
   const dayNum = Math.min((s.count || 0) + 1, 7);
   const adRequired = STREAK_AD_REQUIRED[dayNum] !== false;
   const newCount = dayNum;
@@ -6314,6 +6352,7 @@ async function claimStreakDay() {
       cancelPendingClaim(ymid);
       logAdAttempt('Streak Day ' + newCount, 'flagged', streakElapsed, 'sdk_error');
       rollbackStreakGuard();
+      renderStreak(userData.streak); // restore the box to claimable — local state was never mutated on this path
       showModal('❌', 'Ad Not Completed', 'Please watch the full ad to claim your streak!', 'error');
       return;
     }
@@ -6321,6 +6360,7 @@ async function claimStreakDay() {
       cancelPendingClaim(ymid);
       logAdAttempt('Streak Day ' + newCount, 'flagged', streakElapsed, watch.reason || 'quick_resolve');
       rollbackStreakGuard();
+      renderStreak(userData.streak); // restore the box to claimable — local state was never mutated on this path
       showModal('⚠️', 'Ad Not Counted', 'Our system detected the ad wasn\'t fully watched — no coins this time.', 'info');
       return;
     }
@@ -6640,6 +6680,25 @@ window.addEventListener('load', async () => {
   await initFirebase();
   startNetworkMonitor();
 
+  // Proactive Telegram re-login — fires immediately on boot, in PARALLEL
+  // with Firebase's own persisted-session restore, instead of only
+  // reactively (the existing onAuthStateChanged fallback further below,
+  // which waits for Firebase to first report "no user" and then an
+  // 800ms/3000ms timeout before trying telegramAutoLogin()). Telegram's
+  // in-app WebView — especially on low-RAM Android devices, where
+  // Android can kill and later recreate the WebView process with wiped
+  // storage between sessions — doesn't reliably persist Firebase Auth's
+  // IndexedDB-based session the way a normal browser tab does. Since
+  // telegramAutoLogin() signs in with a deterministic email/password
+  // derived from the Telegram user ID (always available fresh from
+  // Telegram on every launch, independent of any storage), trying it
+  // immediately closes the gap instead of waiting on a timer — and it's
+  // safe to run even when the old session DID restore fine: signing in
+  // again to the same already-current account is a harmless no-op
+  // (guarded by _tgLoginBusy against overlapping with the reactive
+  // fallback below, if that also ends up firing).
+  if (isTelegramEnv()) { telegramAutoLogin(); }
+
   // Splash fallback — auth controls normal hide, this is max 4s safety net
   setTimeout(() => {
     const s = document.getElementById('splash');
@@ -6834,7 +6893,6 @@ if (window.Telegram && window.Telegram.WebApp) {
   } catch(e) { console.warn('Telegram WebApp init:', e); }
 }
 </script>
-
 <!-- index.html mein add karo body ke end mein -->
 <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
 <script>eruda.init();</script>
