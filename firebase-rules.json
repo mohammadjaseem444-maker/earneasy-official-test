@@ -1,0 +1,146 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+        ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+        "coins": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999" },
+        "adsWatched": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 500" },
+        "fraudFlagCount": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "bonusClaimed": { ".validate": "newData.isBoolean() || newData.isString()" },
+        "bonusDate": { ".validate": "newData.isString()" },
+        "mathLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
+        "captchaLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
+        "colorLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
+        "banned": { ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+        "suspended": { ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+        "completedTasks": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
+        "withdrawHistory": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
+        "claimedMilestones": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && auth.uid == $uid" },
+        "usedPromoCodes": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
+        "deviceInfo": { ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
+        "deviceFingerprint": { ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
+        "streak": {
+          ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+          ".write": "auth != null && auth.uid == $uid",
+          "count": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 7" },
+          "claimedToday": { ".validate": "newData.isBoolean()" },
+          "lastDay": { ".validate": "newData.isString() && newData.val().length == 10" },
+          "lastClaimTime": { ".validate": "newData.isNumber()" }
+        },
+        "deviceCode": {
+          ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+          ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+          ".validate": "newData.isString() && newData.val().matches(/^[0-9]{10}$/)"
+        },
+        "loginType": { ".validate": "newData.isString() && (newData.val() === 'google' || newData.val() === 'telegram')" },
+        "phone": { ".validate": "newData.isString() && newData.val().length <= 15" },
+        "telegramId": { ".validate": "newData.isString()" }
+      }
+    },
+    "usernames": { ".read": "auth != null", "$name": { ".write": "auth != null && (!data.exists() || data.val() == auth.uid)" } },
+    "adminUIDs": { ".read": "auth != null", "$adminUid": { ".write": "auth != null && (auth.uid == $adminUid || root.child('adminUIDs').child(auth.uid).exists())" } },
+    "ambassadorUIDs": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$baUid": { ".write": "auth != null && (auth.uid == $baUid || root.child('adminUIDs').child(auth.uid).exists())" }
+    },
+    "presence": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$uid": { ".write": "auth != null && auth.uid == $uid" }
+    },
+    "referLookup": { ".read": "auth != null", "$code": { ".write": "auth != null && !data.exists()" } },
+    "tasks": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "promoCodes": {
+      ".read": "auth != null",
+      ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$code": { ".write": "auth != null && (root.child('adminUIDs').child(auth.uid).exists() || root.child('ambassadorUIDs').child(auth.uid).exists())", "usedCount": { ".write": "auth != null" } }
+    },
+    "appSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "offerwallSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "withdrawRequests": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$requestId": { ".write": "auth != null" } },
+    "adminNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
+    "sentNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "adminConfig": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "passwordHash": { ".read": "auth != null" },
+      "ambassadorPasswordHash": { ".read": "auth != null" }
+    },
+    "deviceFingerprints": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      ".indexOn": ["uid"],
+      "$fp": {
+        ".read": "auth != null",
+        ".write": "auth != null && (!data.exists() || data.child('uid').val() == auth.uid || root.child('adminUIDs').child(auth.uid).exists())"
+      }
+    },
+    "deviceSignatures": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$sig": {
+        ".write": "auth != null",
+        ".read": "auth != null"
+      }
+    },
+    "deviceCodeCounter": { ".read": "auth != null", ".write": "auth != null" },
+    "deviceCodeUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$code": { ".write": "auth != null" } },
+    "telegramUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$tgId": { ".write": "auth != null", ".read": "auth != null" } },
+    "wipedUIDs": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "multiAccountAttempts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
+    "errorLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
+    "userFeedback": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
+    "wipedAccounts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "adminLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
+    "wannads_log": { ".read": false, ".write": true },
+    "bannedEmails": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$email": { ".read": "auth != null" } },
+    "referralRewards": {
+      "$referrerId": {
+        ".read": "auth != null && auth.uid == $referrerId",
+        ".write": "auth != null && auth.uid == $referrerId",
+        "$entry": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['coins']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 1000"
+        }
+      }
+    },
+    "debugLog": { ".read": true, ".write": true },
+    "pendingClaims": {
+      ".read": true,
+      ".write": true,
+      "$ymid": {
+        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
+      }
+    },
+    "claimConfirmations": {
+      ".read": true,
+      ".write": true,
+      "$ymid": {
+        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
+      }
+    },
+    "adAttempts": {
+      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "pendingCoins": {
+      "$uid": {
+        ".write": true,
+        ".read": "auth != null && auth.uid == $uid",
+        "$txId": {
+          ".validate": "newData.hasChildren(['coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
+        }
+      }
+    },
+    "processedTx": { ".write": true, ".read": true },
+    "clawbacks": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "$other": { ".read": false, ".write": false }
+  }
+}

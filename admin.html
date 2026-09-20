@@ -308,6 +308,8 @@ tbody td .td-main { color:var(--text); font-weight:600; font-size:0.9rem; }
 /* ===== QUICK STATS ROW ===== */
 .quick-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
 .quick-stat { background:var(--bg3); border:1px solid var(--border); border-radius:10px; padding:14px; text-align:center; }
+.quick-stat.clickable { position:relative; cursor:pointer; }
+.quick-stat.clickable::after { content:'\f105'; font-family:'Font Awesome 5 Free'; font-weight:900; position:absolute; top:6px; right:8px; font-size:0.65rem; color:var(--text3); opacity:0.6; }
 .quick-stat-val { font-family:'Orbitron',sans-serif; font-size:1.1rem; color:var(--green); font-weight:700; }
 .quick-stat-lbl { font-size:0.7rem; color:var(--text2); margin-top:3px; }
 
@@ -624,43 +626,51 @@ table { min-width:600px; }
       </div>
 
       <div class="quick-stats">
-        <div class="quick-stat" style="cursor:pointer" onclick="openOnlineUsersDrilldown()">
+        <div class="quick-stat clickable" onclick="openOnlineUsersDrilldown()">
           <div class="quick-stat-val" id="stat-online" style="color:#22c55e;">0</div>
           <div class="quick-stat-lbl">🟢 Online Now</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openDailyActiveDrilldown()">
           <div class="quick-stat-val" id="stat-active-today" style="color:#22c55e;">0</div>
           <div class="quick-stat-lbl">📅 Daily Active Users</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openBannedDrilldown()">
           <div class="quick-stat-val" id="stat-banned">0</div>
           <div class="quick-stat-lbl">🚫 Banned Users</div>
         </div>
-        <div class="quick-stat" style="cursor:pointer" onclick="openReferralsDrilldown()">
+        <div class="quick-stat clickable" onclick="openReferralsDrilldown()">
           <div class="quick-stat-val" id="stat-refers">0</div>
           <div class="quick-stat-lbl">🔗 Total Referrals</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openAdsTodayDrilldown()">
           <div class="quick-stat-val" id="stat-ads-today">0</div>
           <div class="quick-stat-lbl">📺 Ads Today</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openGameTodayDrilldown('math')">
           <div class="quick-stat-val" id="stat-math-today">0</div>
           <div class="quick-stat-lbl">🔢 Math Today</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openGameTodayDrilldown('captcha')">
           <div class="quick-stat-val" id="stat-captcha-today">0</div>
           <div class="quick-stat-lbl">🔤 Captcha Today</div>
         </div>
-        <div class="quick-stat">
+        <div class="quick-stat clickable" onclick="openGameTodayDrilldown('color')">
           <div class="quick-stat-val" id="stat-color-today">0</div>
           <div class="quick-stat-lbl">🎨 Color Today</div>
         </div>
-        <div class="quick-stat" style="cursor:pointer" onclick="openTasksDrilldown()">
+        <div class="quick-stat clickable" onclick="openBonusTodayDrilldown()">
+          <div class="quick-stat-val" id="stat-bonus-today" style="color:#22c55e;">0</div>
+          <div class="quick-stat-lbl">🎁 Bonus Claimed Today</div>
+        </div>
+        <div class="quick-stat clickable" onclick="openStreakTodayDrilldown()">
+          <div class="quick-stat-val" id="stat-streak-today" style="color:#f97316;">0</div>
+          <div class="quick-stat-lbl">🔥 Streak Claimed Today</div>
+        </div>
+        <div class="quick-stat clickable" onclick="openTasksDrilldown()">
           <div class="quick-stat-val" id="stat-tasks">0</div>
           <div class="quick-stat-lbl">✅ Task Completions</div>
         </div>
-        <div class="quick-stat" onclick="showPage('feedbacks')" style="cursor:pointer;">
+        <div class="quick-stat clickable" onclick="showPage('feedbacks')">
           <div class="quick-stat-val" id="stat-feedbacks" style="color:#3b82f6;">0</div>
           <div class="quick-stat-lbl">💬 Unread Feedback</div>
         </div>
@@ -1016,64 +1026,76 @@ table { min-width:600px; }
         </div>
 
         <div class="settings-card">
-          <div class="settings-card-title"><i class="fas fa-gamepad"></i> Game Hub</div>
+          <div class="settings-card-title"><i class="fas fa-calculator"></i> Math Game</div>
           <div class="form-grid-3">
             <div class="form-group">
-              <label class="form-label">MATH — ATTEMPTS/DAY</label>
+              <label class="form-label">ATTEMPTS/DAY</label>
               <input class="form-input" type="number" id="set-mathLimit" value="20" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">MATH — COINS</label>
+              <label class="form-label">COINS</label>
               <input class="form-input" type="number" id="set-mathCoins" value="5" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">MATH — ENABLED</label>
+              <label class="form-label">ENABLED</label>
               <select class="form-select" id="set-mathEnabled">
                 <option value="true">Enabled</option>
                 <option value="false">Disabled</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">MATH — COOLDOWN (secs)</label>
+              <label class="form-label">COOLDOWN (secs)</label>
               <input class="form-input" type="number" id="set-mathCooldown" value="0" min="0" max="300"/>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title"><i class="fas fa-font"></i> Captcha Game</div>
+          <div class="form-grid-3">
             <div class="form-group">
-              <label class="form-label">CAPTCHA — COOLDOWN (secs)</label>
-              <input class="form-input" type="number" id="set-captchaCooldown" value="0" min="0" max="300"/>
-            </div>
-            <div class="form-group">
-              <label class="form-label">COLOR — COOLDOWN (secs)</label>
-              <input class="form-input" type="number" id="set-colorCooldown" value="0" min="0" max="300"/>
-            </div>
-            <div class="form-group">
-              <label class="form-label">CAPTCHA — ATTEMPTS/DAY</label>
+              <label class="form-label">ATTEMPTS/DAY</label>
               <input class="form-input" type="number" id="set-captchaLimit" value="20" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">CAPTCHA — COINS</label>
+              <label class="form-label">COINS</label>
               <input class="form-input" type="number" id="set-captchaCoins" value="10" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">CAPTCHA — ENABLED</label>
+              <label class="form-label">ENABLED</label>
               <select class="form-select" id="set-captchaEnabled">
                 <option value="true">Enabled</option>
                 <option value="false">Disabled</option>
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">COLOR — ATTEMPTS/DAY</label>
+              <label class="form-label">COOLDOWN (secs)</label>
+              <input class="form-input" type="number" id="set-captchaCooldown" value="0" min="0" max="300"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title"><i class="fas fa-palette"></i> Color Game</div>
+          <div class="form-grid-3">
+            <div class="form-group">
+              <label class="form-label">ATTEMPTS/DAY</label>
               <input class="form-input" type="number" id="set-colorLimit" value="20" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">COLOR — COINS</label>
+              <label class="form-label">COINS</label>
               <input class="form-input" type="number" id="set-colorCoins" value="5" min="1"/>
             </div>
             <div class="form-group">
-              <label class="form-label">COLOR — ENABLED</label>
+              <label class="form-label">ENABLED</label>
               <select class="form-select" id="set-colorEnabled">
                 <option value="true">Enabled</option>
                 <option value="false">Disabled</option>
               </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">COOLDOWN (secs)</label>
+              <input class="form-input" type="number" id="set-colorCooldown" value="0" min="0" max="300"/>
             </div>
           </div>
         </div>
@@ -1490,15 +1512,21 @@ table { min-width:600px; }
         <div class="detail-item"><div class="detail-item-lbl">💰 TOTAL COINS</div><div class="detail-item-val green" id="ud-coins">0</div></div>
         <div class="detail-item"><div class="detail-item-lbl">👥 REFERRALS</div><div class="detail-item-val" id="ud-refers" style="cursor:pointer;color:var(--green);text-decoration:underline;" onclick="openReferralTree(selectedUser?.uid)">0</div></div>
         <div class="detail-item"><div class="detail-item-lbl">💰 REF EARNINGS</div><div class="detail-item-val" id="ud-referEarnings">0</div></div>
-        <div class="detail-item"><div class="detail-item-lbl">💸 WITHDRAWN</div><div class="detail-item-val" id="ud-withdrawn">₹0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">💸 WITHDRAWN</div><div class="detail-item-val" id="ud-withdrawn" style="cursor:pointer;color:var(--green);text-decoration:underline;" onclick="openWithdrawHistoryDrilldown()">₹0</div></div>
         <div class="detail-item"><div class="detail-item-lbl">📅 JOINED</div><div class="detail-item-val" id="ud-joined">-</div></div>
         <div class="detail-item"><div class="detail-item-lbl">🔗 REFER CODE</div><div class="detail-item-val" id="ud-refCode">-</div></div>
-        <div class="detail-item"><div class="detail-item-lbl">📱 DEVICE</div><div class="detail-item-val" id="ud-device" style="font-size:0.78rem;">-</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">📱 DEVICE</div><div class="detail-item-val" id="ud-device" style="font-size:0.78rem;cursor:pointer;color:var(--green);" onclick="openDeviceDetailDrilldown()">-</div></div>
         <div class="detail-item ud-devicecode-row" style="display:none;"><div class="detail-item-lbl">🔢 DEVICE CODE</div><div class="detail-item-val" id="ud-devicecode" style="font-family:monospace;font-size:0.9rem;font-weight:700;letter-spacing:2px;color:#16a34a;">—</div></div>
         <div class="detail-item"><div class="detail-item-lbl">📺 ADS TODAY</div><div class="detail-item-val" id="ud-ads">0</div></div>
-        <div class="detail-item"><div class="detail-item-lbl">🎁 BONUS</div><div class="detail-item-val" id="ud-bonus">-</div></div>
-        <div class="detail-item"><div class="detail-item-lbl">📊 TODAY EARNED</div><div class="detail-item-val" id="ud-todayEarned">0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">🔢 MATH TODAY</div><div class="detail-item-val" id="ud-mathToday">0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">🔤 CAPTCHA TODAY</div><div class="detail-item-val" id="ud-captchaToday">0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">🎨 COLOR TODAY</div><div class="detail-item-val" id="ud-colorToday">0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">🎁 BONUS</div><div class="detail-item-val" id="ud-bonus" style="cursor:pointer;color:var(--green);" onclick="openBonusHistoryDrilldown()">-</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">🔥 STREAK TODAY</div><div class="detail-item-val" id="ud-streakToday" style="cursor:pointer;color:var(--green);" onclick="openStreakHistoryDrilldown()">-</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">📊 TODAY EARNED</div><div class="detail-item-val" id="ud-todayEarned" style="cursor:pointer;color:var(--green);" onclick="openTodayEarningDrilldown()">0</div></div>
+        <div class="detail-item"><div class="detail-item-lbl">💎 LIFETIME EARNED</div><div class="detail-item-val" style="cursor:pointer;color:var(--green);" onclick="openLifetimeEarningDrilldown()">View →</div></div>
       </div>
+      <div id="ud-paymentMethods" style="margin-bottom:14px;"></div>
       <div style="font-size:0.8rem;font-weight:700;color:var(--text2);margin-bottom:8px;letter-spacing:0.5px;">EDIT COINS</div>
       <div class="coin-edit">
         <input type="number" id="coinEditInput" placeholder="Amount (use - to deduct)" />
@@ -2302,6 +2330,180 @@ function openOnlineUsersDrilldown() {
   drilldownRender(`Online Now (${uids.length})`, html);
 }
 
+// Shared row template for the simple "name -> right-aligned value" drill-downs below
+const _userRow = (uid, name, rightText) => `
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid var(--border);cursor:pointer;" onclick="closeModal('drilldownModal');openUserDetail('${uid}')">
+    <div style="font-weight:700;color:var(--text);">${name}</div>
+    <div style="color:var(--text3);font-size:0.82rem;">${rightText}</div>
+  </div>`;
+
+// ---- Daily Active Users ----
+function openDailyActiveDrilldown() {
+  _drilldownStack = [];
+  const rows = (window._todayActivity||[]).filter(u => u.activeTodayFlag);
+  if (!rows.length) { drilldownRender('Daily Active Users', _dEmpty('Aaj tak koi active nahi hua')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name, u.joinedToday ? 'new signup' : 'returning')).join('');
+  drilldownRender(`Daily Active Users (${rows.length})`, html);
+}
+
+// ---- Banned Users ----
+function openBannedDrilldown() {
+  _drilldownStack = [];
+  const rows = allUsers.filter(u => u.banned);
+  if (!rows.length) { drilldownRender('Banned Users', _dEmpty('Koi bhi banned nahi hai')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name||'Unknown', '')).join('');
+  drilldownRender(`Banned Users (${rows.length})`, html);
+}
+
+// ---- Ads Today ----
+function openAdsTodayDrilldown() {
+  _drilldownStack = [];
+  const rows = (window._todayActivity||[]).filter(u => u.adsToday > 0).sort((a,b) => b.adsToday - a.adsToday);
+  if (!rows.length) { drilldownRender('Ads Today', _dEmpty('Aaj tak kisi ne ad nahi dekha')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name, `${u.adsToday} ads`)).join('');
+  drilldownRender(`Ads Today — ${rows.length} users`, html);
+}
+
+// ---- Math / Captcha / Color Today (shared — same shape, just a different field) ----
+const _GAME_LABELS = { math: ['Math Today', 'mathToday', 'games'], captcha: ['Captcha Today', 'captchaToday', 'games'], color: ['Color Today', 'colorToday', 'games'] };
+function openGameTodayDrilldown(type) {
+  _drilldownStack = [];
+  const [label, field] = _GAME_LABELS[type];
+  const rows = (window._todayActivity||[]).filter(u => u[field] > 0).sort((a,b) => b[field] - a[field]);
+  if (!rows.length) { drilldownRender(label, _dEmpty('Aaj tak koi nahi khela')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name, `${u[field]} games`)).join('');
+  drilldownRender(`${label} — ${rows.length} users`, html);
+}
+
+// ---- Bonus / Streak claimed today ----
+function openBonusTodayDrilldown() {
+  _drilldownStack = [];
+  const rows = window._bonusClaimedTodayUsers || [];
+  if (!rows.length) { drilldownRender('Bonus Claimed Today', _dEmpty('Aaj tak kisi ne bonus claim nahi kiya')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name, '✓ claimed')).join('');
+  drilldownRender(`Bonus Claimed Today (${rows.length})`, html);
+}
+
+function openStreakTodayDrilldown() {
+  _drilldownStack = [];
+  const rows = window._streakClaimedTodayUsers || [];
+  if (!rows.length) { drilldownRender('Streak Claimed Today', _dEmpty('Aaj tak kisi ne streak claim nahi ki')); return; }
+  const html = rows.map(u => _userRow(u.uid, u.name, '✓ claimed')).join('');
+  drilldownRender(`Streak Claimed Today (${rows.length})`, html);
+}
+
+// ---- Within User Details: Withdraw History ----
+function openWithdrawHistoryDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  const hist = (selectedUser.withdrawHistory||[]).slice().sort((a,b) => (b.time||'').localeCompare(a.time||''));
+  if (!hist.length) { drilldownRender('Withdraw History', _dEmpty('Koi withdrawal nahi hua')); return; }
+  const statusColor = s => s==='success' ? '#22c55e' : s==='failed' ? '#ef4444' : '#eab308';
+  const html = hist.map(w => `
+    <div style="padding:10px 4px;border-bottom:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:700;color:var(--gold);">₹${w.amount||0}</div>
+        <span style="color:${statusColor(w.status)};font-size:0.72rem;font-weight:700;">${(w.status||'pending').toUpperCase()}</span>
+      </div>
+      <div style="color:var(--text3);font-size:0.78rem;margin-top:2px;">${w.method||'-'} — ${w.account||'-'}</div>
+      <div style="color:var(--text3);font-size:0.72rem;">${w.time||'-'}</div>
+    </div>`).join('');
+  drilldownRender(`Withdraw History (${hist.length})`, html);
+}
+
+// ---- Within User Details: Device full info ----
+function openDeviceDetailDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  const di = selectedUser.deviceInfo;
+  if (!di) { drilldownRender('Device Details', _dEmpty('Device info available nahi hai')); return; }
+  const rows = [
+    ['Model', di.deviceModel || di.deviceName || '-'],
+    ['Device Name', di.deviceName || '-'],
+    ['Last Seen', di.lastSeen ? new Date(di.lastSeen).toLocaleString('en-IN') : '-'],
+    ['Platform', di.platform || '-'],
+    ['User Agent', di.ua || '-'],
+  ];
+  const html = rows.map(([label, val]) => `
+    <div style="padding:10px 4px;border-bottom:1px solid var(--border);">
+      <div style="color:var(--text3);font-size:0.72rem;letter-spacing:0.5px;">${label.toUpperCase()}</div>
+      <div style="font-weight:600;color:var(--text);word-break:break-all;">${val}</div>
+    </div>`).join('');
+  drilldownRender('Device Details', html);
+}
+
+// ---- Earnings ledger (Today Earning / Lifetime Earning / Bonus History
+// / Streak History) — all four read from the same per-user earnLog node
+// that addCoins() (ads/games/tasks/promo/bonus) and the direct-credit
+// paths (signup, referral, milestone, streak) all write to. Fetched
+// fresh each time one of these is opened, not prefetched when User
+// Details itself opens — earnLog can grow large for an old, active
+// account, and the basic detail view shouldn't pay for it up front.
+async function _fetchEarnLog(uid) {
+  const snap = await fbGet('users/' + uid + '/earnLog');
+  if (!snap || !snap.exists()) return [];
+  return Object.values(snap.val()).sort((a,b) => (b.time||0)-(a.time||0));
+}
+
+function _sourceBreakdownHtml(entries) {
+  const bySource = {};
+  entries.forEach(e => { bySource[e.source] = (bySource[e.source]||0) + (e.amount||0); });
+  const rows = Object.entries(bySource).sort((a,b) => b[1]-a[1]);
+  const total = rows.reduce((s,[,v]) => s+v, 0);
+  return `<div style="padding:10px 4px;border-bottom:2px solid var(--border2);display:flex;justify-content:space-between;font-weight:800;"><div>TOTAL</div><div style="color:var(--green);">${total.toLocaleString()} coins</div></div>` +
+    rows.map(([src, amt]) => `<div style="display:flex;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border);"><div style="color:var(--text);">${src}</div><div style="color:var(--text2);">${amt.toLocaleString()}</div></div>`).join('');
+}
+
+async function openTodayEarningDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  drilldownRender('Today Earning', '<div style="text-align:center;padding:24px;"><i class="fas fa-spinner fa-spin"></i></div>');
+  const all = await _fetchEarnLog(selectedUser.uid);
+  const istNow = new Date(Date.now() + 5.5*60*60000);
+  const today = istNow.toISOString().split('T')[0];
+  const todays = all.filter(e => e.time && new Date(e.time + 5.5*60*60000).toISOString().split('T')[0] === today);
+  if (!todays.length) { drilldownRender('Today Earning', _dEmpty('Aaj koi earning nahi hui')); return; }
+  drilldownRender('Today Earning', _sourceBreakdownHtml(todays));
+}
+
+async function openLifetimeEarningDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  drilldownRender('Lifetime Earning', '<div style="text-align:center;padding:24px;"><i class="fas fa-spinner fa-spin"></i></div>');
+  const all = await _fetchEarnLog(selectedUser.uid);
+  if (!all.length) { drilldownRender('Lifetime Earning', _dEmpty('Koi earning record nahi hai (ye feature isi din se shuru hua — usse pehle ki earning is breakdown mein nahi aayegi, sirf current coin balance mein already shaamil hai)')); return; }
+  drilldownRender('Lifetime Earning', _sourceBreakdownHtml(all));
+}
+
+async function openBonusHistoryDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  drilldownRender('Bonus History', '<div style="text-align:center;padding:24px;"><i class="fas fa-spinner fa-spin"></i></div>');
+  const all = await _fetchEarnLog(selectedUser.uid);
+  const claims = all.filter(e => e.source === 'Daily Bonus');
+  if (!claims.length) { drilldownRender('Bonus History', _dEmpty('Bonus history khaali hai (ye feature isi din se track ho raha hai)')); return; }
+  const html = `<div style="padding:10px 4px;border-bottom:2px solid var(--border2);font-weight:800;">Total ${claims.length} baar claim kiya</div>` +
+    claims.map(c => `<div style="display:flex;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border);"><div style="color:var(--text);">${new Date(c.time).toLocaleString('en-IN')}</div><div style="color:var(--green);">+${c.amount}</div></div>`).join('');
+  drilldownRender('Bonus History', html);
+}
+
+async function openStreakHistoryDrilldown() {
+  if (!selectedUser) return;
+  _drilldownStack = [];
+  drilldownRender('Streak History', '<div style="text-align:center;padding:24px;"><i class="fas fa-spinner fa-spin"></i></div>');
+  const all = await _fetchEarnLog(selectedUser.uid);
+  const claims = all.filter(e => e.source === 'Daily Streak');
+  if (!claims.length) { drilldownRender('Streak History', _dEmpty('Streak history khaali hai (ye feature isi din se track ho raha hai)')); return; }
+  const fullCycles = claims.filter(c => c.day === 7).length;
+  const totalStreakCoins = claims.reduce((s,c) => s + (c.amount||0), 0);
+  const html = `<div style="padding:10px 4px;border-bottom:2px solid var(--border2);">
+      <div style="display:flex;justify-content:space-between;font-weight:800;"><div>7-Day cycles poori ki</div><div style="color:#f97316;">${fullCycles}</div></div>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;"><div>Streak se total coins</div><div style="color:var(--green);">${totalStreakCoins.toLocaleString()}</div></div>
+    </div>` +
+    claims.map(c => `<div style="display:flex;justify-content:space-between;padding:10px 4px;border-bottom:1px solid var(--border);"><div style="color:var(--text);">${new Date(c.time).toLocaleString('en-IN')} ${c.day===7?'🔥':''}</div><div style="color:var(--text2);">Day ${c.day||'?'} — +${c.amount}</div></div>`).join('');
+  drilldownRender('Streak History', html);
+}
+
 function showPage(name) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
@@ -2494,6 +2696,13 @@ function computeAndRenderDashboardStats(users) {
   let totalAdsToday = 0, mathToday = 0, captchaToday = 0, colorToday = 0;
   let taskCompletionsTotal = 0;
   const taskCompletionsByTask = {};
+  // Per-user breakdown for today's stat cards, so their drill-downs don't
+  // need a second Firebase read or a second pass over allUsers — this
+  // loop already visits every user once, so just record what each of
+  // them did today while we're here.
+  const todayActivity = [];
+  const bonusClaimedTodayUsers = [];
+  const streakClaimedTodayUsers = [];
 
   arr.forEach(u => {
     totalCoins += u.coins||0;
@@ -2511,9 +2720,11 @@ function computeAndRenderDashboardStats(users) {
     if (joinedToday) newUsersToday++;
 
     const activeTodayFlag = u.lastReset===today || u.adsDate===today || joinedToday;
+    let uAdsToday = 0, uMathToday = 0, uCaptchaToday = 0, uColorToday = 0;
     if (activeTodayFlag) {
       activeToday++;
-      totalAdsToday += u.adsWatched||0;
+      uAdsToday = u.adsWatched||0;
+      totalAdsToday += uAdsToday;
       // "?? limit" (not the old "|| 0") for a user who hasn't touched a
       // given game today at all — their mathLeft/captchaLeft/colorLeft
       // field may genuinely not exist yet (e.g. a brand-new signup who
@@ -2523,10 +2734,17 @@ function computeAndRenderDashboardStats(users) {
       // maximum, inflating these numbers. Missing should mean "hasn't
       // played" (0 played, full amount still remaining), not "already
       // played everything".
-      mathToday += Math.max(0, mathLimit - (u.mathLeft ?? mathLimit));
-      captchaToday += Math.max(0, captchaLimit - (u.captchaLeft ?? captchaLimit));
-      colorToday += Math.max(0, colorLimit - (u.colorLeft ?? colorLimit));
+      uMathToday = Math.max(0, mathLimit - (u.mathLeft ?? mathLimit));
+      uCaptchaToday = Math.max(0, captchaLimit - (u.captchaLeft ?? captchaLimit));
+      uColorToday = Math.max(0, colorLimit - (u.colorLeft ?? colorLimit));
+      mathToday += uMathToday;
+      captchaToday += uCaptchaToday;
+      colorToday += uColorToday;
     }
+    todayActivity.push({uid: u.uid, name: u.name||'Unknown', joinedToday, activeTodayFlag, adsToday: uAdsToday, mathToday: uMathToday, captchaToday: uCaptchaToday, colorToday: uColorToday});
+
+    if (u.bonusDate === today) bonusClaimedTodayUsers.push({uid: u.uid, name: u.name||'Unknown'});
+    if (u.streak && u.streak.lastDay === today && u.streak.claimedToday) streakClaimedTodayUsers.push({uid: u.uid, name: u.name||'Unknown'});
 
     (u.withdrawHistory||[]).forEach(w => { if(w.status==='pending') pendingCount++; });
 
@@ -2562,7 +2780,12 @@ function computeAndRenderDashboardStats(users) {
   setText('stat-color-today', colorToday.toLocaleString());
   setText('stat-tasks', taskCompletionsTotal.toLocaleString());
   setText('pendingBadge', pendingCount);
+  setText('stat-bonus-today', bonusClaimedTodayUsers.length);
+  setText('stat-streak-today', streakClaimedTodayUsers.length);
   window._taskCompletionsByTask = taskCompletionsByTask;
+  window._todayActivity = todayActivity;
+  window._bonusClaimedTodayUsers = bonusClaimedTodayUsers;
+  window._streakClaimedTodayUsers = streakClaimedTodayUsers;
 
   // Revenue estimate (unchanged math, still driven by today's ad count)
   const CPM = 0.80; // $0.80 per 1000 ads (conservative India estimate)
@@ -2901,6 +3124,39 @@ async function openUserDetail(uid) {
   document.getElementById('ud-ads').textContent = u.adsWatched||0;
   document.getElementById('ud-bonus').textContent = u.bonusClaimed ? 'Claimed ✓' : 'Not claimed';
   document.getElementById('ud-todayEarned').textContent = u.todayEarned||0;
+  // Math/Captcha/Color today — derived the same way the dashboard's own
+  // per-game "Today" cards are (limit minus what's left), using the SAME
+  // live app-settings limits, so this always matches the dashboard.
+  const istNowU = new Date(Date.now() + 5.5 * 60 * 60000);
+  const todayU = istNowU.toISOString().split('T')[0];
+  const activeTodayU = u.lastReset===todayU || u.adsDate===todayU;
+  const mathLimitU = (window._appSettings && window._appSettings.mathLimit) || 20;
+  const captchaLimitU = (window._appSettings && window._appSettings.captchaLimit) || 20;
+  const colorLimitU = (window._appSettings && window._appSettings.colorLimit) || 20;
+  document.getElementById('ud-mathToday').textContent = activeTodayU ? Math.max(0, mathLimitU - (u.mathLeft ?? mathLimitU)) : 0;
+  document.getElementById('ud-captchaToday').textContent = activeTodayU ? Math.max(0, captchaLimitU - (u.captchaLeft ?? captchaLimitU)) : 0;
+  document.getElementById('ud-colorToday').textContent = activeTodayU ? Math.max(0, colorLimitU - (u.colorLeft ?? colorLimitU)) : 0;
+  const _stEl = document.getElementById('ud-streakToday');
+  if (_stEl) _stEl.textContent = (u.streak && u.streak.lastDay===todayU && u.streak.claimedToday) ? 'Claimed ✓' : 'Not claimed';
+  // Payment methods — derived entirely from withdrawHistory (grouped by
+  // method, most recent account per method kept), not a separately
+  // stored field. Means nothing new has to be written on every withdraw,
+  // and existing/past withdrawals already show up correctly here.
+  const _pmEl = document.getElementById('ud-paymentMethods');
+  if (_pmEl) {
+    const byMethod = {};
+    (u.withdrawHistory||[]).forEach(w => {
+      if (!w.method || !w.account) return;
+      if (!byMethod[w.method] || (w.time||'') > (byMethod[w.method].time||'')) byMethod[w.method] = w;
+    });
+    const methods = Object.keys(byMethod);
+    if (methods.length) {
+      _pmEl.innerHTML = `<div style="font-size:0.8rem;font-weight:700;color:var(--text2);margin-bottom:8px;letter-spacing:0.5px;">KNOWN PAYMENT METHODS</div>` +
+        `<div class="detail-grid">` + methods.map(m => `<div class="detail-item"><div class="detail-item-lbl">${m.toUpperCase()}</div><div class="detail-item-val" style="font-size:0.8rem;font-family:monospace;">${byMethod[m].account}</div></div>`).join('') + `</div>`;
+    } else {
+      _pmEl.innerHTML = '';
+    }
+  }
   const banBtn = document.getElementById('ud-banBtn');
   banBtn.innerHTML = u.banned ? '<i class="fas fa-unlock"></i> UNBAN USER' : '<i class="fas fa-ban"></i> BAN USER';
   banBtn.className = `btn-action ${u.banned?'btn-green':'btn-red'}`;
@@ -3424,7 +3680,7 @@ function renderWithdrawals() {
   if(!filtered.length){tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text3)">No withdrawal requests</td></tr>';return;}
   tbody.innerHTML = filtered.map(w => `
     <tr>
-      <td><div class="td-main">${w.userName}</div></td>
+      <td><div class="td-main" style="cursor:pointer;color:var(--green);text-decoration:underline;" onclick="openUserDetail('${w.uid}')">${w.userName}</div></td>
       <td style="color:var(--gold);font-weight:700">${w.amount}</td>
       <td>${w.method||'-'}</td>
       <td style="font-family:monospace;font-size:0.8rem">${w.account||'-'}</td>

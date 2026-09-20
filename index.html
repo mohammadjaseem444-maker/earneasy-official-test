@@ -1,216 +1,15 @@
 <!DOCTYPE html>
 <!--
-FIREBASE REALTIME DATABASE RULES — accurate as of this file's last edit.
-Paste in: Firebase Console -> Realtime Database -> Rules -> Publish
-
-NOTE: this used to be TWO different, both-stale copies embedded in this
-file (this one, plus a second one further down near the Firebase SDK
-script tags) which disagreed with each other and with what was actually
-live. That caused real confusion during debugging. Now there is exactly
-ONE copy, right here, and the second location just points back to it.
-
-{
-  "rules": {
-    "users": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$uid": {
-        ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
-        ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
-        "coins": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9999999" },
-        "adsWatched": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 500" },
-        "fraudFlagCount": { ".validate": "newData.isNumber() && newData.val() >= 0" },
-        "bonusClaimed": { ".validate": "newData.isBoolean() || newData.isString()" },
-        "bonusDate": { ".validate": "newData.isString()" },
-        "mathLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
-        "captchaLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
-        "colorLeft": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
-        "banned": { ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-        "suspended": { ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-        "completedTasks": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
-        "withdrawHistory": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
-        "claimedMilestones": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && auth.uid == $uid" },
-        "usedPromoCodes": { ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())", ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
-        "deviceInfo": { ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
-        "deviceFingerprint": { ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())" },
-        "streak": {
-          ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
-          ".write": "auth != null && auth.uid == $uid",
-          "count": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 7" },
-          "claimedToday": { ".validate": "newData.isBoolean()" },
-          "lastDay": { ".validate": "newData.isString() && newData.val().length == 10" },
-          "lastClaimTime": { ".validate": "newData.isNumber()" }
-        },
-        "deviceCode": {
-          ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-          ".write": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
-          ".validate": "newData.isString() && newData.val().matches(/^[0-9]{10}$/)"
-        },
-        "loginType": { ".validate": "newData.isString() && (newData.val() === 'google' || newData.val() === 'telegram')" },
-        "phone": { ".validate": "newData.isString() && newData.val().length <= 15" },
-        "telegramId": { ".validate": "newData.isString()" }
-      }
-    },
-    "usernames": { ".read": "auth != null", "$name": { ".write": "auth != null && (!data.exists() || data.val() == auth.uid)" } },
-    "adminUIDs": { ".read": "auth != null", "$adminUid": { ".write": "auth != null && (auth.uid == $adminUid || root.child('adminUIDs').child(auth.uid).exists())" } },
-    "ambassadorUIDs": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$baUid": { ".write": "auth != null && (auth.uid == $baUid || root.child('adminUIDs').child(auth.uid).exists())" }
-    },
-    "referLookup": { ".read": "auth != null", "$code": { ".write": "auth != null && !data.exists()" } },
-    "tasks": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "promoCodes": {
-      ".read": "auth != null",
-      ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$code": { ".write": "auth != null && (root.child('adminUIDs').child(auth.uid).exists() || root.child('ambassadorUIDs').child(auth.uid).exists())", "usedCount": { ".write": "auth != null" } }
-    },
-    "appSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "offerwallSettings": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "withdrawRequests": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$requestId": { ".write": "auth != null" } },
-    "adminNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
-    "sentNotifications": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "adminConfig": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "passwordHash": { ".read": "auth != null" },
-      "ambassadorPasswordHash": { ".read": "auth != null" }
-    },
-    "deviceFingerprints": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      ".indexOn": ["uid"],
-      "$fp": {
-        ".read": "auth != null",
-        ".write": "auth != null && (!data.exists() || data.child('uid').val() == auth.uid || root.child('adminUIDs').child(auth.uid).exists())"
-      }
-    },
-    "deviceSignatures": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$sig": {
-        ".write": "auth != null",
-        ".read": "auth != null"
-      }
-    },
-    "deviceCodeCounter": { ".read": "auth != null", ".write": "auth != null" },
-    "deviceCodeUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$code": { ".write": "auth != null" } },
-    "telegramUsers": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$tgId": { ".write": "auth != null", ".read": "auth != null" } },
-    "wipedUIDs": { ".read": "auth != null", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "multiAccountAttempts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
-    "errorLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": true },
-    "userFeedback": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null" },
-    "wipedAccounts": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "adminLogs": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()" },
-    "wannads_log": { ".read": false, ".write": true },
-    "bannedEmails": { ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", ".write": "auth != null && root.child('adminUIDs').child(auth.uid).exists()", "$email": { ".read": "auth != null" } },
-    "referralRewards": {
-      "$referrerId": {
-        ".read": "auth != null && auth.uid == $referrerId",
-        ".write": "auth != null && auth.uid == $referrerId",
-        "$entry": {
-          ".write": "auth != null && !data.exists()",
-          ".validate": "newData.hasChildren(['coins']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 1000"
-        }
-      }
-    },
-    "presence": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$uid": { ".write": "auth != null && auth.uid == $uid" }
-    },
-    "debugLog": { ".read": true, ".write": true },
-    "pendingClaims": {
-      ".read": true,
-      ".write": true,
-      "$ymid": {
-        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
-      }
-    },
-    "claimConfirmations": {
-      ".read": true,
-      ".write": true,
-      "$ymid": {
-        ".validate": "newData.hasChildren(['uid','coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
-      }
-    },
-    "adAttempts": {
-      ".read": "auth != null && root.child('adminUIDs').child(auth.uid).exists()",
-      "$uid": {
-        ".read": "auth != null && (auth.uid == $uid || root.child('adminUIDs').child(auth.uid).exists())",
-        ".write": "auth != null && auth.uid == $uid"
-      }
-    },
-    "pendingCoins": {
-      "$uid": {
-        ".write": true,
-        ".read": "auth != null && auth.uid == $uid",
-        "$txId": {
-          ".validate": "newData.hasChildren(['coins','source','ts']) && newData.child('coins').isNumber() && newData.child('coins').val() > 0 && newData.child('coins').val() <= 500"
-        }
-      }
-    },
-    "processedTx": { ".write": true, ".read": true },
-    "clawbacks": {
-      "$uid": {
-        ".read": "auth != null && auth.uid == $uid",
-        ".write": false
-      }
-    },
-    "$other": { ".read": false, ".write": false }
-  }
-}
-
-*** IMPORTANT: deviceCodeCounter's rule above has been changed from
-*** admin-only read to "auth != null" read. Firebase transactions
-*** require client read access on the path being transacted (the SDK
-*** reads the current value locally before proposing the write) — with
-*** an admin-only read, getOrAssignDeviceCode()'s transaction call
-*** could NEVER succeed for a normal user, unconditionally, regardless
-*** of any timing fix. This rules change MUST be published for that fix
-*** to actually work — it cannot be fixed from the JavaScript side alone.
-
-*** IMPORTANT (Extra-effort security audit): admin.html used to
-*** auto-register ANY visitor as a full admin the moment the page
-*** loaded, before any password check — see the comment at the top of
-*** initFirebase() in admin.html for the full explanation. The fix
-*** moved that registration into doUnlock(), after the password is
-*** verified against a SHA-256 hash instead of a plaintext value, which
-*** requires THESE rules changes to actually work (the code alone can't
-*** do it):
-***   1. "adminConfig/passwordHash" and "adminConfig/ambassadorPasswordHash"
-***      now have their OWN ".read": "auth != null" — readable by any
-***      signed-in (even anonymous, unregistered) visitor. This is safe
-***      because a hash can't be reversed into the real password, and it's
-***      required so doUnlock()/doBALogin() can verify a login attempt
-***      BEFORE that visitor is registered as admin/ambassador. Writing
-***      these still requires already being an admin (inherited from the
-***      parent adminConfig .write rule, unchanged).
-***   2. New "ambassadorUIDs" node added, mirroring "adminUIDs" but for
-***      the lower-privilege Brand Ambassador role — so a verified
-***      Ambassador gets ONLY promo-code-creation rights, not full admin
-***      database access (which is what accidentally happened before,
-***      since Ambassadors hitting admin.html triggered the SAME
-***      unconditional adminUIDs auto-registration bug as everyone else).
-***   3. "promoCodes/$code" write access tightened from "auth != null"
-***      (ANY signed-in user — including a completely ordinary EarnEasy
-***      app user who just signed in with Google/Telegram, not just
-***      admin/ambassador) to admin-or-ambassador only. The old rule meant
-***      any regular app user could call the Firebase SDK directly and
-***      mint themselves an arbitrary promo code for free coins, bypassing
-***      the app UI entirely. "usedCount"'s own write rule is UNCHANGED
-***      (still "auth != null") since normal users still need to be able
-***      to redeem a code via claimPromo().
-*** The old plaintext "adminConfig/password" and
-*** "adminConfig/ambassadorPassword" fields are no longer written or read
-*** by the app — safe to leave any old values there alone (they're
-*** simply unused now) or delete them, either is fine.
-
-*** IMPORTANT (admin dashboard live-stats build): one more rules change
-*** needed for the new admin dashboard features — a new "presence" node,
-*** which powers the live "Online Now" count. The app (index.html)
-*** writes its own uid under here while active (one child key per open
-*** connection/tab, Firebase's documented multi-connection-safe pattern)
-*** and removes it via onDisconnect()/on logout; admin reads the whole
-*** node to count/list who's online.
-*** (The Total Referrals drill-down needed no rules change — it's built
-*** entirely from each user's own referCode/referCodeUsed fields, which
-*** admin could already read as part of the normal "users" node.)
+FIREBASE REALTIME DATABASE RULES have moved to a separate file:
+firebase-rules.json (same folder as this file) — that is now the ONE
+canonical, always-current copy to paste into Firebase Console ->
+Realtime Database -> Rules -> Publish. This comment used to hold the
+full rules text directly, but keeping it in this file (and briefly, at
+one point, in two disagreeing copies in this same file) made it easy to
+add a new feature's rule requirement here and forget to actually paste
+it live — which is exactly what happened with the presence node. Check
+firebase-rules.json before assuming any rules-dependent feature (device
+codes, Online Now presence, admin/ambassador login, etc.) is live.
 -->
 <html lang="en">
 <head>
@@ -1864,10 +1663,10 @@ body.slow-net .splash-spinner {
 // ============================================================
 // FIREBASE CONFIG
 // ============================================================
-// The authoritative Firebase Rules are documented once, in the single
-// comment block at the very top of this file (right after <!DOCTYPE html>).
-// This is the only copy — a second, disagreeing copy used to live here,
-// which was a real source of confusion during debugging.
+// The authoritative Firebase Rules live in firebase-rules.json (same
+// folder as this file) — not in this file at all anymore. See the short
+// pointer comment at the very top of this file (right after
+// <!DOCTYPE html>) for why.
 // ============================================================
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyAO1I_Vy4ViEYlGnRqHGDdYYk1XoK5cSZ4",
@@ -2892,6 +2691,24 @@ async function getDeviceSignature() {
 
 // Step 4: Get or assign sequential 10-digit device code from Firebase
 async function getOrAssignDeviceCode(signature) {
+  // Retries — this used to be a single attempt. On a poor connection
+  // (very common for this app's user base) waitForRtdbAuthReady() or
+  // the transaction below can transiently fail, and previously that
+  // meant that specific user just silently never got a device code for
+  // that whole session — no error shown, nothing retried until their
+  // NEXT login. That's the "kisi ko milta hai kisi ko nahi" pattern:
+  // deviceCodeCounter's rules are already correct (confirmed against
+  // the live rules), so this was a timing gap, not a permissions one.
+  // 3 attempts with a short growing pause closes it.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const code = await _tryAssignDeviceCode(signature);
+    if (code) return code;
+    if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 1200));
+  }
+  return null;
+}
+
+async function _tryAssignDeviceCode(signature) {
   if (!firebaseReady) return null;
   try {
     // Strong check (real RTDB round-trip), not just the weak client-side
@@ -2906,12 +2723,6 @@ async function getOrAssignDeviceCode(signature) {
       return snap.val().code;
     }
     // Assign new sequential code via transaction.
-    // NOTE: Firebase transactions require client READ access on the
-    // path being transacted (the SDK reads the current value locally
-    // before proposing the write) — deviceCodeCounter's rule must allow
-    // "auth != null" read, not admin-only, or this permanently fails
-    // for every non-admin user regardless of timing. See the Rules
-    // update that must accompany this fix.
     let newCode = null;
     await db.ref('deviceCodeCounter').transaction(current => {
       const next = (current || 0) + 1;
@@ -3128,6 +2939,7 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
   userData.signupBonusAmount = signupBonus;
   userData.joinedAt = Date.now();
   userData.signupBonusGiven = true;
+  logEarning('Signup Bonus', signupBonus);
   // Welcome notification - customizable from admin
   const welcomeMsg = (window._appSettings && window._appSettings.welcomeNotifMsg) || 
     'Tum is app me games, ads aur tasks karke earning kar sakte ho! Minimum ₹50 par withdraw karo. Happy earning! 💰';
@@ -3153,6 +2965,7 @@ async function setupNewUser(uid, displayName, email, photoURL, refCode, loginTyp
           // New user gets coins immediately (their own data) — unchanged
           userData.coins += refCoins;
           userData.todayEarned += refCoins;
+          logEarning('Referral Welcome Bonus', refCoins);
           userData.referCodeUsed = refCode;
           userData.referCodeUsedAt = Date.now();
           userData.referrerUid = referrerId;
@@ -3275,6 +3088,7 @@ async function enterApp() {
           userData.referCount = newReferCount;
           userData.referEarnings = newReferEarnings;
           userData.lastReferAt = newLastReferAt;
+          logEarning('Referral Reward', totalCoins, {referrals: totalReferrals});
           if(!userData.notifications) userData.notifications = [];
           userData.notifications.unshift({
             title: '🎁 Referral Reward!',
@@ -3890,6 +3704,7 @@ async function checkAndClaimMilestones(referCount, milestones) {
 
       userData.coins = newCoins;
       userData.claimedMilestones = newClaimed;
+      logEarning('Milestone', m.coins, {refs: m.refs});
       updateUI();
       
       showModal('🎁', 'Milestone Reached!', 
@@ -4402,6 +4217,20 @@ function startCooldown(seconds) {
       }
     }, 1000);
   }
+}
+
+// Shared earnings-log helper — every one of the 5 places coins actually
+// get credited (addCoins itself, which already had its own earnLog push
+// for ads/games/tasks/promo/bonus; plus signup bonus, the new-user's
+// referral welcome bonus, the referrer's own collected reward, and
+// milestones/streak, which credited coins directly and were never
+// logged at all) now writes through here, so admin's earning-breakdown
+// features have one consistent, complete record instead of gaps for
+// whichever source happened to bypass addCoins().
+function logEarning(source, amount, extra) {
+  if (!firebaseReady || !currentUser || !amount) return;
+  const entry = Object.assign({ amount, source, time: Date.now() }, extra || {});
+  db.ref('users/' + currentUser + '/earnLog').push(entry).catch(()=>{});
 }
 
 async function addCoins(amount, source, ymid) {
@@ -6383,6 +6212,7 @@ async function claimStreakDay() {
   // Postback confirmed (or it was a free-claim day) — safe to credit
   const streakCoinResult = await db.ref('users/' + currentUser + '/coins').transaction(c => (c||0) + coins);
   userData.coins = streakCoinResult.committed ? streakCoinResult.snapshot.val() : ((userData.coins||0) + coins);
+  logEarning('Daily Streak', coins, {day: newCount});
 
   updateUI();
   renderStreak(newStreak);
